@@ -1,0 +1,3 @@
+Coloca aqui las capturas de pantalla solicitadas en el entregable:
+01-dashboard.png, 02-planificacion.png, 03-costos.png, 04-infraestructura.png,
+05-seguridad.png, 06-red.png, 07-servicios.png, 08-responsive.png
