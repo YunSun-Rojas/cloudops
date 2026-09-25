@@ -9,6 +9,7 @@ import {
   Boxes,
   Cloud,
   X,
+  MapPin,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useApp } from '../context/AppContext';
@@ -28,6 +29,7 @@ export const navItems: NavItem[] = [
   { to: '/security', label: 'Seguridad', icon: ShieldCheck, hint: 'IAM y cumplimiento' },
   { to: '/network', label: 'Arquitectura de Red', icon: Network, hint: 'VPC y borde' },
   { to: '/services', label: 'Servicios AWS', icon: Boxes, hint: 'Catalogo' },
+  { to: '/auditoria', label: 'Auditoria', icon: MapPin, hint: 'Ubicacion GPS' },
 ];
 
 interface SidebarProps {

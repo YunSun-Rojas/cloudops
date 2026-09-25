@@ -8,6 +8,7 @@ import Infrastructure from './pages/Infrastructure';
 import Security from './pages/Security';
 import Network from './pages/Network';
 import Services from './pages/Services';
+import Auditoria from './pages/Auditoria';
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
             <Route path="/security" element={<Security />} />
             <Route path="/network" element={<Network />} />
             <Route path="/services" element={<Services />} />
+            <Route path="/auditoria" element={<Auditoria />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>
         </Routes>
