@@ -50,6 +50,32 @@ export default function Auditoria() {
     }
   };
 
+  const handleSuccess = (position: GeolocationPosition) => {
+    const entry: AuditEntry = {
+      id: `${position.timestamp}-${Math.random().toString(36).slice(2, 8)}`,
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      timestamp: new Date(position.timestamp).toISOString(),
+    };
+    setCurrent(entry);
+    setStatus('success');
+    persist([entry, ...history].slice(0, 20));
+  };
+
+  const describeError = (error: GeolocationPositionError) => {
+    if (error.code === error.PERMISSION_DENIED) {
+      return 'Permiso de ubicacion denegado. Habilitalo en el navegador para continuar.';
+    }
+    if (error.code === error.POSITION_UNAVAILABLE) {
+      return 'La ubicacion no esta disponible. Revisa que el servicio de ubicacion del sistema operativo este activado.';
+    }
+    if (error.code === error.TIMEOUT) {
+      return 'Se agoto el tiempo de espera al obtener la ubicacion. Verifica tu conexion y que el servicio de ubicacion del dispositivo este activado, luego intenta de nuevo.';
+    }
+    return 'No se pudo obtener la ubicacion.';
+  };
+
   const captureLocation = () => {
     if (!('geolocation' in navigator)) {
       setStatus('unsupported');
@@ -60,32 +86,22 @@ export default function Auditoria() {
     setStatus('loading');
     setErrorMsg('');
 
+    // Primer intento: alta precision (GPS), con tiempo de espera generoso.
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const entry: AuditEntry = {
-          id: `${position.timestamp}-${Math.random().toString(36).slice(2, 8)}`,
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
-          timestamp: new Date(position.timestamp).toISOString(),
-        };
-        setCurrent(entry);
-        setStatus('success');
-        persist([entry, ...history].slice(0, 20));
+      handleSuccess,
+      () => {
+        // Si falla o tarda demasiado, se reintenta con precision estandar
+        // (red / Wi-Fi), que responde mucho mas rapido.
+        navigator.geolocation.getCurrentPosition(
+          handleSuccess,
+          (fallbackError) => {
+            setStatus('error');
+            setErrorMsg(describeError(fallbackError));
+          },
+          { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 },
+        );
       },
-      (error) => {
-        setStatus('error');
-        if (error.code === error.PERMISSION_DENIED) {
-          setErrorMsg('Permiso de ubicacion denegado. Habilitalo en el navegador para continuar.');
-        } else if (error.code === error.POSITION_UNAVAILABLE) {
-          setErrorMsg('La ubicacion no esta disponible en este momento.');
-        } else if (error.code === error.TIMEOUT) {
-          setErrorMsg('Se agoto el tiempo de espera al obtener la ubicacion.');
-        } else {
-          setErrorMsg('No se pudo obtener la ubicacion.');
-        }
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
     );
   };
 
@@ -155,7 +171,15 @@ export default function Auditoria() {
         {(status === 'error' || status === 'unsupported') && (
           <div className="mb-5 flex items-start gap-3 rounded-card border border-alert/25 bg-alert/5 p-4 text-small text-alert">
             <ShieldAlert size={18} className="mt-0.5 shrink-0" />
-            <p>{errorMsg}</p>
+            <div>
+              <p>{errorMsg}</p>
+              <ul className="mt-2 list-disc space-y-1 pl-4 text-[12px] text-alert/90">
+                <li>Verifica que el icono de ubicacion en la barra del navegador tenga el permiso en "Permitir".</li>
+                <li>En Windows: Configuracion → Privacidad → Ubicacion, debe estar activada.</li>
+                <li>En macOS: Preferencias del Sistema → Privacidad y seguridad → Localizacion, activa el navegador.</li>
+                <li>Intenta de nuevo; el sistema ahora reintenta con ubicacion aproximada si el GPS de alta precision tarda demasiado.</li>
+              </ul>
+            </div>
           </div>
         )}
 
