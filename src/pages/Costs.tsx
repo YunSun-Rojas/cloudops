@@ -1,4 +1,28 @@
-import { useMemo, useState } from 'react';
+/*
+INSTALACIÓN
+1. Reemplaza src/pages/Costs.tsx por este archivo.
+2. En AppContext.tsx, reemplaza addCostItem por la siguiente función.
+   Se asume que el estado existente se llama costItems / setCostItems.
+   Conserva la persistencia del contexto si tiene lógica adicional.
+
+const addCostItem = (item: Omit<(typeof costItems)[number], 'id'>) => {
+  const newId = crypto.randomUUID();
+  setCostItems((previous) => {
+    const existing = previous.find((entry) => entry.serviceId === item.serviceId);
+    const updated = { ...item, id: existing?.id ?? newId };
+    if (!existing) return [...previous, updated];
+    return previous
+      .filter((entry) => entry.serviceId !== item.serviceId || entry.id === existing.id)
+      .map((entry) => entry.id === existing.id ? updated : entry);
+  });
+};
+
+Cada servicio tiene una sola estimación. Actualizar reemplaza cantidad y horas;
+los demás servicios permanecen. Los importes guardados no incluyen factor regional.
+La página conserva la acción original Restaurar del contexto.
+*/
+
+import { useMemo, useState, type FormEvent } from 'react';
 import { Calculator, Download, PieChart, RotateCcw, Wallet } from 'lucide-react';
 import SectionCard from '../components/SectionCard';
 import CostCard from '../components/CostCard';
@@ -10,7 +34,6 @@ import { awsServices, getServiceById } from '../data/awsServices';
 import { chartPalette, currency, numberFormat, today } from '../utils/format';
 import { downloadCsv } from '../utils/report';
 import type { ChartDatum } from '../types/cloud';
-
 export default function Costs() {
   const {
     costItems,
@@ -18,26 +41,49 @@ export default function Costs() {
     removeCostItem,
     resetCostItems,
     region,
-    monthlyCost,
-    annualCost,
     pushNotification,
   } = useApp();
+  const [serviceId, setServiceId] = useState(awsServices[0]?.id ?? '');
+  const initialItem = costItems.find((item) => item.serviceId === serviceId);
+  const [quantity, setQuantity] = useState(() => String(initialItem?.quantity ?? 1));
+  const [hours, setHours] = useState(() => String(initialItem?.hours ?? 730));
+  const [error, setError] = useState('');
+  const selectedService = getServiceById(serviceId);
+  const existingItem = costItems.find((item) => item.serviceId === serviceId);
+  const qty = Number(quantity);
+  const hrs = Number(hours);
+  const validInputs = quantity.trim() !== '' && hours.trim() !== '' &&
+    Number.isSafeInteger(qty) && qty >= 1 && Number.isFinite(hrs) && hrs > 0;
+  const base = selectedService ? selectedService.hourlyPrice * qty * hrs : 0;
+  const validEstimate = Boolean(selectedService) && validInputs &&
+    Number.isFinite(base) && base >= 0 &&
+    Number.isFinite(base * region.costFactor * 12) && region.costFactor >= 0;
+  const previewMonthly = validEstimate ? base * region.costFactor : 0;
 
-  const [serviceId, setServiceId] = useState(awsServices[0].id);
-  const [quantity, setQuantity] = useState('1');
-  const [hours, setHours] = useState('730');
+  // Stored amounts are base costs. Apply the regional factor once, when displaying.
+  const pricedItems = useMemo(() => costItems.map((item) => {
+    const monthlyCost = item.hourlyPrice * item.quantity * item.hours * region.costFactor;
+    return { ...item, monthlyCost, annualCost: monthlyCost * 12 };
+  }), [costItems, region.costFactor]);
+  const monthlyCost = pricedItems.reduce((total, item) => total + item.monthlyCost, 0);
+  const annualCost = monthlyCost * 12;
 
-  const selectedService = getServiceById(serviceId) ?? awsServices[0];
-  const previewMonthly =
-    selectedService.hourlyPrice * Number(quantity || 0) * Number(hours || 0) * region.costFactor;
+  const selectService = (id: string) => {
+    const item = costItems.find((entry) => entry.serviceId === id);
+    setServiceId(id);
+    setQuantity(String(item?.quantity ?? 1));
+    setHours(String(item?.hours ?? 730));
+    setError('');
+  };
 
-  const handleAdd = (event: React.FormEvent) => {
+  const handleAdd = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const qty = Math.max(Number(quantity) || 0, 0);
-    const hrs = Math.max(Number(hours) || 0, 0);
-    if (qty <= 0 || hrs <= 0) return;
-
-    const base = selectedService.hourlyPrice * qty * hrs;
+    if (!validEstimate || !selectedService) {
+      setError('Ingresa una cantidad entera mayor que cero y horas válidas mayores que cero.');
+      return;
+    }
+    setError('');
+    // Requires the atomic addCostItem replacement supplied with this page.
     addCostItem({
       serviceId: selectedService.id,
       serviceName: selectedService.name,
@@ -47,26 +93,25 @@ export default function Costs() {
       monthlyCost: base,
       annualCost: base * 12,
     });
-
     pushNotification({
-      title: 'Costo agregado',
-      message: `${selectedService.name} se incorporo a la estimacion mensual.`,
-      status: 'warning',
+      title: existingItem ? 'Estimación actualizada' : 'Costo agregado',
+      message: existingItem
+        ? `${selectedService.name}: se reemplazaron la cantidad y las horas anteriores.`
+        : `${selectedService.name} se incorporó a la estimación mensual.`,
+      status: 'ok',
     });
   };
-
   const distribution: ChartDatum[] = useMemo(
     () =>
-      costItems
+      pricedItems
         .map((item, index) => ({
           label: item.serviceName.replace('Amazon ', '').replace('AWS ', ''),
-          value: item.monthlyCost * region.costFactor,
+          value: item.monthlyCost,
           color: chartPalette[index % chartPalette.length],
         }))
         .sort((a, b) => b.value - a.value),
-    [costItems, region.costFactor],
+    [pricedItems],
   );
-
   const annualSeries: ChartDatum[] = useMemo(
     () =>
       distribution.slice(0, 6).map((item) => ({
@@ -76,7 +121,6 @@ export default function Costs() {
       })),
     [distribution],
   );
-
   /** Reto adicional: exportacion del reporte de costos en formato CSV */
   const exportReport = () => {
     downloadCsv(`reporte-costos-${region.name}.csv`, [
@@ -85,27 +129,25 @@ export default function Costs() {
       ['Factor de region', region.costFactor.toFixed(2)],
       ['Fecha de emision', today()],
       [],
-      ['Servicio', 'Cantidad', 'Horas', 'Precio hora USD', 'Costo mensual USD', 'Costo anual USD'],
-      ...costItems.map((item) => [
+      ['Servicio', 'Cantidad', 'Horas', 'Precio hora base USD', 'Costo mensual USD', 'Costo anual USD'],
+      ...pricedItems.map((item) => [
         item.serviceName,
         item.quantity,
         item.hours,
         item.hourlyPrice.toFixed(4),
-        (item.monthlyCost * region.costFactor).toFixed(2),
-        (item.annualCost * region.costFactor).toFixed(2),
+        item.monthlyCost.toFixed(2),
+        item.annualCost.toFixed(2),
       ]),
       [],
       ['Total mensual', monthlyCost.toFixed(2)],
       ['Total anual', annualCost.toFixed(2)],
     ]);
-
     pushNotification({
       title: 'Reporte exportado',
       message: 'Se descargo el reporte de costos en formato CSV.',
       status: 'ok',
     });
   };
-
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -138,13 +180,12 @@ export default function Costs() {
           tone="info"
         />
       </div>
-
       <SectionCard
         title="Calculadora de costos simulada"
         description="Selecciona el servicio, la cantidad y las horas de uso estimadas al mes"
         icon={Calculator}
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button type="button" onClick={resetCostItems} className="btn-ghost py-2">
               <RotateCcw size={15} /> Restaurar
             </button>
@@ -163,7 +204,7 @@ export default function Costs() {
               id="service"
               className="input-field"
               value={serviceId}
-              onChange={(event) => setServiceId(event.target.value)}
+              onChange={(event) => selectService(event.target.value)}
             >
               {awsServices.map((service) => (
                 <option key={service.id} value={service.id}>
@@ -172,7 +213,6 @@ export default function Costs() {
               ))}
             </select>
           </div>
-
           <div>
             <label className="label-field" htmlFor="quantity">
               Cantidad
@@ -181,12 +221,13 @@ export default function Costs() {
               id="quantity"
               type="number"
               min={1}
+              step={1}
+              required
               className="input-field"
               value={quantity}
               onChange={(event) => setQuantity(event.target.value)}
             />
           </div>
-
           <div>
             <label className="label-field" htmlFor="hours">
               Horas estimadas al mes
@@ -194,18 +235,19 @@ export default function Costs() {
             <input
               id="hours"
               type="number"
-              min={1}
+              min={0.01}
+              step="any"
+              required
               className="input-field"
               value={hours}
               onChange={(event) => setHours(event.target.value)}
             />
           </div>
-
           <div className="grid gap-3 sm:grid-cols-3 md:col-span-4">
             <div className="rounded-lg bg-base p-3 dark:bg-night-bg">
-              <p className="text-[12px] text-muted dark:text-night-muted">Costo estimado unitario</p>
+              <p className="text-[12px] text-muted dark:text-night-muted">Costo unitario en la región</p>
               <p className="text-[18px] font-bold text-ink dark:text-night-ink">
-                {currency(selectedService.hourlyPrice)} / h
+                {currency((selectedService?.hourlyPrice ?? 0) * region.costFactor)} / h
               </p>
             </div>
             <div className="rounded-lg bg-base p-3 dark:bg-night-bg">
@@ -219,15 +261,19 @@ export default function Costs() {
               </p>
             </div>
           </div>
-
           <div className="md:col-span-4">
+            <p className="mb-3 text-small text-muted dark:text-night-muted" aria-live="polite">
+              {existingItem
+                ? 'Este servicio ya está incluido. Al guardar se reemplazan sus valores anteriores.'
+                : 'Este servicio se añadirá a la estimación.'}
+            </p>
+            {error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}
             <button type="submit" className="btn-primary w-full sm:w-auto">
-              <Calculator size={16} /> Agregar a la estimacion
+              <Calculator size={16} /> {existingItem ? 'Actualizar estimación' : 'Agregar a la estimación'}
             </button>
           </div>
         </form>
       </SectionCard>
-
       <div className="grid gap-4 lg:grid-cols-2">
         <SectionCard
           title="Distribucion de costos"
@@ -246,10 +292,9 @@ export default function Costs() {
             />
           )}
         </SectionCard>
-
         <SectionCard
           title="Costo anual por servicio"
-          description="Comparativa del gasto proyectado a 12 meses"
+          description="Hasta 6 servicios con mayor gasto proyectado a 12 meses"
           icon={Wallet}
         >
           {annualSeries.length === 0 ? (
@@ -261,7 +306,6 @@ export default function Costs() {
           )}
         </SectionCard>
       </div>
-
       <SectionCard
         title="Detalle de la estimacion"
         description="Cada linea aplica el factor de costo de la region activa"
@@ -273,15 +317,11 @@ export default function Costs() {
           </p>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {costItems.map((item) => (
+            {pricedItems.map((item) => (
               <CostCard
                 key={item.id}
-                item={{
-                  ...item,
-                  monthlyCost: item.monthlyCost * region.costFactor,
-                  annualCost: item.annualCost * region.costFactor,
-                }}
-                share={monthlyCost === 0 ? 0 : ((item.monthlyCost * region.costFactor) / monthlyCost) * 100}
+                item={item}
+                share={monthlyCost === 0 ? 0 : (item.monthlyCost / monthlyCost) * 100}
                 onRemove={removeCostItem}
               />
             ))}

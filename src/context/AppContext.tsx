@@ -221,8 +221,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addCostItem = useCallback((item: Omit<CostItem, 'id'>) => {
-    setState((prev) => ({ ...prev, costItems: [{ ...item, id: uid('cost') }, ...prev.costItems] }));
-  }, []);
+  const newId = uid('cost');
+
+  setState((prev) => {
+    const existing = prev.costItems.find(
+      (entry) => entry.serviceId === item.serviceId
+    );
+
+    const updated: CostItem = {
+      ...item,
+      id: existing?.id ?? newId,
+    };
+
+    const costItems = existing
+      ? prev.costItems
+          .filter(
+            (entry) =>
+              entry.serviceId !== item.serviceId ||
+              entry.id === existing.id
+          )
+          .map((entry) =>
+            entry.id === existing.id ? updated : entry
+          )
+      : [updated, ...prev.costItems];
+
+    return {
+      ...prev,
+      costItems,
+    };
+  });
+}, []);
 
   const removeCostItem = useCallback((id: string) => {
     setState((prev) => ({ ...prev, costItems: prev.costItems.filter((item) => item.id !== id) }));
