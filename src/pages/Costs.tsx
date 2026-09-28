@@ -1,29 +1,5 @@
-/*
-INSTALACIÓN
-1. Reemplaza src/pages/Costs.tsx por este archivo.
-2. En AppContext.tsx, reemplaza addCostItem por la siguiente función.
-   Se asume que el estado existente se llama costItems / setCostItems.
-   Conserva la persistencia del contexto si tiene lógica adicional.
-
-const addCostItem = (item: Omit<(typeof costItems)[number], 'id'>) => {
-  const newId = crypto.randomUUID();
-  setCostItems((previous) => {
-    const existing = previous.find((entry) => entry.serviceId === item.serviceId);
-    const updated = { ...item, id: existing?.id ?? newId };
-    if (!existing) return [...previous, updated];
-    return previous
-      .filter((entry) => entry.serviceId !== item.serviceId || entry.id === existing.id)
-      .map((entry) => entry.id === existing.id ? updated : entry);
-  });
-};
-
-Cada servicio tiene una sola estimación. Actualizar reemplaza cantidad y horas;
-los demás servicios permanecen. Los importes guardados no incluyen factor regional.
-La página conserva la acción original Restaurar del contexto.
-*/
-
 import { useMemo, useState, type FormEvent } from 'react';
-import { Calculator, Download, PieChart, RotateCcw, Wallet } from 'lucide-react';
+import { Calculator, ClipboardList, Download, PieChart, RotateCcw, Wallet } from 'lucide-react';
 import SectionCard from '../components/SectionCard';
 import CostCard from '../components/CostCard';
 import StatCard from '../components/StatCard';
@@ -33,17 +9,74 @@ import { useApp } from '../context/AppContext';
 import { awsServices, getServiceById } from '../data/awsServices';
 import { chartPalette, currency, numberFormat, today } from '../utils/format';
 import { downloadCsv } from '../utils/report';
-import type { ChartDatum } from '../types/cloud';
+import type { ChartDatum, CloudProposal } from '../types/cloud';
+
 export default function Costs() {
-  const {
-    costItems,
-    addCostItem,
-    removeCostItem,
-    resetCostItems,
-    region,
-    pushNotification,
-  } = useApp();
-  const [serviceId, setServiceId] = useState(awsServices[0]?.id ?? '');
+  const { proposals, proposalsLoading, activeProposal, setActiveProposalId } = useApp();
+
+  if (proposalsLoading && !activeProposal) {
+    return <p className="py-10 text-center text-small text-muted">Cargando propuestas...</p>;
+  }
+
+  if (!activeProposal) {
+    return (
+      <SectionCard
+        title="Costos y economía Cloud"
+        description="Los costos se calculan sobre una propuesta"
+        icon={ClipboardList}
+      >
+        <p className="rounded-lg border border-dashed border-line py-10 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
+          Aún no hay propuestas. Registra una en Planificación para estimar sus costos.
+        </p>
+      </SectionCard>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 border-b border-line pb-4 dark:border-night-line sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-[18px] font-semibold leading-tight text-ink dark:text-night-ink">
+            Propuesta a costear
+          </h2>
+          <p className="mt-1 text-small text-muted dark:text-night-muted">
+            Los costos se guardan por propuesta en Supabase
+          </p>
+        </div>
+        <div className="w-full sm:max-w-md">
+          <label className="label-field" htmlFor="proposal">
+            Propuesta activa
+          </label>
+          <select
+            id="proposal"
+            className="input-field"
+            value={activeProposal.id}
+            onChange={(event) => setActiveProposalId(event.target.value)}
+          >
+            {proposals.map((proposal) => (
+              <option key={proposal.id} value={proposal.id}>
+                {proposal.name} — {proposal.regionId}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <CostsContent key={activeProposal.id} proposal={activeProposal} />
+    </div>
+  );
+}
+
+function CostsContent({ proposal }: { proposal: CloudProposal }) {
+  const { costItems, addCostItem, removeCostItem, resetCostItems, region, pushNotification } = useApp();
+
+  // Solo los servicios que esta propuesta planificó
+  const services = useMemo(
+    () => awsServices.filter((service) => proposal.services.includes(service.id)),
+    [proposal.services],
+  );
+
+  const [serviceId, setServiceId] = useState(services[0]?.id ?? '');
   const initialItem = costItems.find((item) => item.serviceId === serviceId);
   const [quantity, setQuantity] = useState(() => String(initialItem?.quantity ?? 1));
   const [hours, setHours] = useState(() => String(initialItem?.hours ?? 730));
@@ -52,19 +85,32 @@ export default function Costs() {
   const existingItem = costItems.find((item) => item.serviceId === serviceId);
   const qty = Number(quantity);
   const hrs = Number(hours);
-  const validInputs = quantity.trim() !== '' && hours.trim() !== '' &&
-    Number.isSafeInteger(qty) && qty >= 1 && Number.isFinite(hrs) && hrs > 0;
+  const validInputs =
+    quantity.trim() !== '' &&
+    hours.trim() !== '' &&
+    Number.isSafeInteger(qty) &&
+    qty >= 1 &&
+    Number.isFinite(hrs) &&
+    hrs > 0;
   const base = selectedService ? selectedService.hourlyPrice * qty * hrs : 0;
-  const validEstimate = Boolean(selectedService) && validInputs &&
-    Number.isFinite(base) && base >= 0 &&
-    Number.isFinite(base * region.costFactor * 12) && region.costFactor >= 0;
+  const validEstimate =
+    Boolean(selectedService) &&
+    validInputs &&
+    Number.isFinite(base) &&
+    base >= 0 &&
+    Number.isFinite(base * region.costFactor * 12) &&
+    region.costFactor >= 0;
   const previewMonthly = validEstimate ? base * region.costFactor : 0;
 
-  // Stored amounts are base costs. Apply the regional factor once, when displaying.
-  const pricedItems = useMemo(() => costItems.map((item) => {
-    const monthlyCost = item.hourlyPrice * item.quantity * item.hours * region.costFactor;
-    return { ...item, monthlyCost, annualCost: monthlyCost * 12 };
-  }), [costItems, region.costFactor]);
+  // Los importes guardados son base; el factor regional se aplica una sola vez, al mostrar
+  const pricedItems = useMemo(
+    () =>
+      costItems.map((item) => {
+        const monthlyCost = item.hourlyPrice * item.quantity * item.hours * region.costFactor;
+        return { ...item, monthlyCost, annualCost: monthlyCost * 12 };
+      }),
+    [costItems, region.costFactor],
+  );
   const monthlyCost = pricedItems.reduce((total, item) => total + item.monthlyCost, 0);
   const annualCost = monthlyCost * 12;
 
@@ -83,7 +129,6 @@ export default function Costs() {
       return;
     }
     setError('');
-    // Requires the atomic addCostItem replacement supplied with this page.
     addCostItem({
       serviceId: selectedService.id,
       serviceName: selectedService.name,
@@ -97,10 +142,11 @@ export default function Costs() {
       title: existingItem ? 'Estimación actualizada' : 'Costo agregado',
       message: existingItem
         ? `${selectedService.name}: se reemplazaron la cantidad y las horas anteriores.`
-        : `${selectedService.name} se incorporó a la estimación mensual.`,
+        : `${selectedService.name} se incorporó a la estimación de ${proposal.name}.`,
       status: 'ok',
     });
   };
+
   const distribution: ChartDatum[] = useMemo(
     () =>
       pricedItems
@@ -121,10 +167,12 @@ export default function Costs() {
       })),
     [distribution],
   );
+
   /** Reto adicional: exportacion del reporte de costos en formato CSV */
   const exportReport = () => {
-    downloadCsv(`reporte-costos-${region.name}.csv`, [
+    downloadCsv(`reporte-costos-${proposal.name}-${region.name}.csv`, [
       ['Reporte de costos CloudOps Dashboard'],
+      ['Propuesta', proposal.name],
       ['Region', region.name, region.location],
       ['Factor de region', region.costFactor.toFixed(2)],
       ['Fecha de emision', today()],
@@ -148,6 +196,7 @@ export default function Costs() {
       status: 'ok',
     });
   };
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -174,12 +223,13 @@ export default function Costs() {
         />
         <StatCard
           label="Costo por usuario"
-          value={currency(monthlyCost / 3500)}
-          hint="Base de 3 500 usuarios activos"
+          value={currency(proposal.estimatedUsers > 0 ? monthlyCost / proposal.estimatedUsers : 0)}
+          hint={`Base de ${numberFormat(proposal.estimatedUsers)} usuarios estimados`}
           icon={Wallet}
           tone="info"
         />
       </div>
+
       <SectionCard
         title="Calculadora de costos simulada"
         description="Selecciona el servicio, la cantidad y las horas de uso estimadas al mes"
@@ -206,7 +256,7 @@ export default function Costs() {
               value={serviceId}
               onChange={(event) => selectService(event.target.value)}
             >
-              {awsServices.map((service) => (
+              {services.map((service) => (
                 <option key={service.id} value={service.id}>
                   {service.name} - {service.unit}
                 </option>
@@ -267,13 +317,18 @@ export default function Costs() {
                 ? 'Este servicio ya está incluido. Al guardar se reemplazan sus valores anteriores.'
                 : 'Este servicio se añadirá a la estimación.'}
             </p>
-            {error && <p role="alert" className="mb-3 text-sm text-red-600">{error}</p>}
+            {error && (
+              <p role="alert" className="mb-3 text-sm text-red-600">
+                {error}
+              </p>
+            )}
             <button type="submit" className="btn-primary w-full sm:w-auto">
               <Calculator size={16} /> {existingItem ? 'Actualizar estimación' : 'Agregar a la estimación'}
             </button>
           </div>
         </form>
       </SectionCard>
+
       <div className="grid gap-4 lg:grid-cols-2">
         <SectionCard
           title="Distribucion de costos"
@@ -306,6 +361,7 @@ export default function Costs() {
           )}
         </SectionCard>
       </div>
+
       <SectionCard
         title="Detalle de la estimacion"
         description="Cada linea aplica el factor de costo de la region activa"
@@ -313,10 +369,10 @@ export default function Costs() {
       >
         {costItems.length === 0 ? (
           <p className="rounded-lg border border-dashed border-line py-10 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
-            La estimacion esta vacia. Agrega servicios desde la calculadora.
+            La estimacion esta vacia. Agrega servicios desde la calculadora o pulsa Restaurar.
           </p>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
             {pricedItems.map((item) => (
               <CostCard
                 key={item.id}

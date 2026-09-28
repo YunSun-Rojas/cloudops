@@ -1,23 +1,22 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from 'react';
+import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState,type ReactNode,} from 'react';
 import type { AppNotification, CloudProposal, CostItem, Region } from '../types/cloud';
 import { defaultRegionId, getRegionById } from '../data/regions';
 import { awsServices } from '../data/awsServices';
 import { securityControls } from '../data/security';
 import { clockTime, uid } from '../utils/format';
+import {
+  deleteProposal,
+  fetchProposals,
+  insertProposal,
+  saveProposalCosts,
+  type NewProposal,
+} from '../lib/proposalsApi';
 
 const STORAGE_KEY = 'cloudops-dashboard-state-v1';
 
+// Solo lo local: los costos ya no se guardan aquí, viven dentro de cada propuesta en Supabase
 interface PersistedState {
-  proposals: CloudProposal[];
-  costItems: CostItem[];
+  activeProposalId: string | null;
   regionId: string;
   darkMode: boolean;
   notifications: AppNotification[];
@@ -29,10 +28,19 @@ interface AppContextValue extends PersistedState {
   annualCost: number;
   activeServices: string[];
   securityScore: number;
+  proposals: CloudProposal[];
+  proposalsLoading: boolean;
+  proposalsError: string | null;
+  /** Propuesta sobre la que trabajan Costos y el resto de módulos */
+  activeProposal: CloudProposal | null;
+  /** Costos de la propuesta activa (importes base, sin factor regional) */
+  costItems: CostItem[];
+  setActiveProposalId: (id: string) => void;
+  refreshProposals: () => Promise<void>;
+  addProposal: (proposal: NewProposal) => Promise<boolean>;
+  removeProposal: (id: string) => Promise<boolean>;
   setRegionId: (id: string) => void;
   toggleDarkMode: () => void;
-  addProposal: (proposal: Omit<CloudProposal, 'id' | 'createdAt'>) => void;
-  removeProposal: (id: string) => void;
   addCostItem: (item: Omit<CostItem, 'id'>) => void;
   removeCostItem: (id: string) => void;
   resetCostItems: () => void;
@@ -42,51 +50,31 @@ interface AppContextValue extends PersistedState {
   resetAll: () => void;
 }
 
-const buildDefaultCostItems = (): CostItem[] => {
-  const preset: Array<{ id: string; quantity: number; hours: number }> = [
-    { id: 'ec2', quantity: 2, hours: 730 },
-    { id: 's3', quantity: 1, hours: 730 },
-    { id: 'rds', quantity: 1, hours: 730 },
-    { id: 'cloudfront', quantity: 1, hours: 730 },
-    { id: 'vpc', quantity: 1, hours: 730 },
-  ];
-
-  return preset.flatMap((row) => {
-    const service = awsServices.find((item) => item.id === row.id);
+/** Costos iniciales de una propuesta: 1 unidad de cada servicio elegido, 730 h al mes */
+const buildProposalCostItems = (serviceIds: string[]): CostItem[] =>
+  serviceIds.flatMap((serviceId) => {
+    const service = awsServices.find((item) => item.id === serviceId);
     if (!service) return [];
-    const monthlyCost = service.hourlyPrice * row.quantity * row.hours;
+    const monthlyCost = service.hourlyPrice * 730;
     return [
       {
         id: uid('cost'),
         serviceId: service.id,
         serviceName: service.name,
-        quantity: row.quantity,
-        hours: row.hours,
+        quantity: 1,
+        hours: 730,
         hourlyPrice: service.hourlyPrice,
         monthlyCost,
         annualCost: monthlyCost * 12,
       },
     ];
   });
-};
+
+const sumMonthly = (items: CostItem[], factor: number) =>
+  items.reduce((total, item) => total + item.monthlyCost, 0) * factor;
 
 const defaultState: PersistedState = {
-  proposals: [
-    {
-      id: uid('prop'),
-      name: 'Plataforma ERP Corporativa',
-      appType: 'Aplicacion web',
-      description:
-        'Migracion del ERP interno a una arquitectura de tres capas sobre AWS con alta disponibilidad Multi-AZ.',
-      regionId: defaultRegionId,
-      estimatedUsers: 3500,
-      availability: '99.9%',
-      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront'],
-      goal: 'Alta disponibilidad',
-      createdAt: new Date().toISOString(),
-    },
-  ],
-  costItems: buildDefaultCostItems(),
+  activeProposalId: null,
   regionId: defaultRegionId,
   darkMode: false,
   notifications: [
@@ -124,8 +112,7 @@ const loadState = (): PersistedState => {
     if (!raw) return defaultState;
     const parsed = JSON.parse(raw) as Partial<PersistedState>;
     return {
-      proposals: parsed.proposals ?? defaultState.proposals,
-      costItems: parsed.costItems ?? defaultState.costItems,
+      activeProposalId: parsed.activeProposalId ?? defaultState.activeProposalId,
       regionId: parsed.regionId ?? defaultState.regionId,
       darkMode: parsed.darkMode ?? defaultState.darkMode,
       notifications: parsed.notifications ?? defaultState.notifications,
@@ -135,10 +122,21 @@ const loadState = (): PersistedState => {
   }
 };
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return 'Error desconocido.';
+};
+
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<PersistedState>(loadState);
+  const [proposals, setProposals] = useState<CloudProposal[]>([]);
+  const [proposalsLoading, setProposalsLoading] = useState(true);
+  const [proposalsError, setProposalsError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -152,18 +150,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
     document.documentElement.classList.toggle('dark', state.darkMode);
   }, [state.darkMode]);
 
+  const refreshProposals = useCallback(async () => {
+    setProposalsLoading(true);
+    try {
+      setProposals(await fetchProposals());
+      setProposalsError(null);
+    } catch (error) {
+      setProposalsError(getErrorMessage(error));
+    } finally {
+      setProposalsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshProposals();
+  }, [refreshProposals]);
+
   const region = useMemo(() => getRegionById(state.regionId), [state.regionId]);
 
-  const monthlyCost = useMemo(
-    () => state.costItems.reduce((total, item) => total + item.monthlyCost, 0) * region.costFactor,
-    [state.costItems, region.costFactor],
+  // Propuesta activa: la elegida, o la más reciente si aún no se eligió ninguna
+  const activeProposal = useMemo(
+    () => proposals.find((item) => item.id === state.activeProposalId) ?? proposals[0] ?? null,
+    [proposals, state.activeProposalId],
   );
 
+  const costItems = useMemo(() => activeProposal?.costItems ?? [], [activeProposal]);
+
+  const monthlyCost = useMemo(() => sumMonthly(costItems, region.costFactor), [costItems, region.costFactor]);
+
   const activeServices = useMemo(() => {
-    const fromCosts = state.costItems.map((item) => item.serviceId);
-    const fromProposals = state.proposals.flatMap((proposal) => proposal.services);
+    const fromCosts = costItems.map((item) => item.serviceId);
+    const fromProposals = proposals.flatMap((proposal) => proposal.services);
     return Array.from(new Set([...fromCosts, ...fromProposals]));
-  }, [state.costItems, state.proposals]);
+  }, [costItems, proposals]);
 
   const securityScore = useMemo(() => {
     const weights = { ok: 1, warning: 0.5, danger: 0, info: 1 } as const;
@@ -174,6 +193,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setRegionId = useCallback((id: string) => {
     setState((prev) => ({ ...prev, regionId: id }));
   }, []);
+
+  // Al elegir una propuesta, la región global pasa a ser la de esa propuesta
+  const setActiveProposalId = useCallback(
+    (id: string) => {
+      const target = proposals.find((item) => item.id === id);
+      setState((prev) => ({ ...prev, activeProposalId: id, regionId: target?.regionId ?? prev.regionId }));
+    },
+    [proposals],
+  );
 
   const toggleDarkMode = useCallback(() => {
     setState((prev) => ({ ...prev, darkMode: !prev.darkMode }));
@@ -192,73 +220,125 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  const addProposal = useCallback((proposal: Omit<CloudProposal, 'id' | 'createdAt'>) => {
-    setState((prev) => ({
-      ...prev,
-      proposals: [
-        { ...proposal, id: uid('prop'), createdAt: new Date().toISOString() },
-        ...prev.proposals,
-      ],
-      notifications: [
-        {
-          id: uid('ntf'),
+    const addProposal = useCallback(
+    async (proposal: NewProposal) => {
+      try {
+        const initialCosts = buildProposalCostItems(proposal.services);
+        const newId = await insertProposal(
+          proposal,
+          initialCosts,
+          getRegionById(proposal.regionId).costFactor,
+        );
+        await refreshProposals();
+        // La propuesta nueva pasa a ser la activa
+        setState((prev) => ({ ...prev, activeProposalId: newId, regionId: proposal.regionId }));
+        pushNotification({
           title: 'Propuesta registrada',
-          message: `${proposal.name} quedo registrada en la region ${proposal.regionId}.`,
-          status: 'ok' as const,
-          time: clockTime(),
-          read: false,
-        },
-        ...prev.notifications,
-      ].slice(0, 12),
-    }));
-  }, []);
+          message: `${proposal.name} quedó registrada en la región ${proposal.regionId} con costos iniciales.`,
+          status: 'ok',
+        });
+        return true;
+      } catch (error) {
+        await refreshProposals();
+        pushNotification({
+          title: 'No se pudo guardar la propuesta',
+          message: getErrorMessage(error),
+          status: 'danger',
+        });
+        return false;
+      }
+    },
+    [pushNotification, refreshProposals],
+  );
 
-  const removeProposal = useCallback((id: string) => {
-    setState((prev) => ({
-      ...prev,
-      proposals: prev.proposals.filter((proposal) => proposal.id !== id),
-    }));
-  }, []);
+  const removeProposal = useCallback(
+    async (id: string) => {
+      try {
+        await deleteProposal(id);
+        await refreshProposals();
+        pushNotification({
+          title: 'Propuesta eliminada',
+          message: 'La propuesta y sus costos se eliminaron correctamente.',
+          status: 'info',
+        });
+        return true;
+      } catch (error) {
+        pushNotification({
+          title: 'No se pudo eliminar la propuesta',
+          message: getErrorMessage(error),
+          status: 'danger',
+        });
+        return false;
+      }
+    },
+    [pushNotification, refreshProposals],
+  );
 
-  const addCostItem = useCallback((item: Omit<CostItem, 'id'>) => {
-  const newId = uid('cost');
+  // Actualiza la pantalla al instante y guarda en Supabase; si falla, vuelve a cargar lo real
+    // Cola de guardados: si editas varias veces seguidas, se guardan de a uno y en orden
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingSaves = useRef(0);
 
-  setState((prev) => {
-    const existing = prev.costItems.find(
-      (entry) => entry.serviceId === item.serviceId
-    );
+  // Actualiza la pantalla al instante y guarda en Supabase; al terminar recarga los datos reales
+  const persistCosts = useCallback(
+    (proposal: CloudProposal, items: CostItem[]) => {
+      setProposals((prev) =>
+        prev.map((item) => (item.id === proposal.id ? { ...item, costItems: items } : item)),
+      );
 
-    const updated: CostItem = {
-      ...item,
-      id: existing?.id ?? newId,
-    };
+      pendingSaves.current += 1;
+      saveQueue.current = saveQueue.current.then(async () => {
+        try {
+          await saveProposalCosts(proposal, items, getRegionById(proposal.regionId).costFactor);
+        } catch (error) {
+          pushNotification({
+            title: 'No se pudieron guardar los costos',
+            message: getErrorMessage(error),
+            status: 'danger',
+          });
+        } finally {
+          pendingSaves.current -= 1;
+          if (pendingSaves.current === 0) await refreshProposals();
+        }
+      });
+      return saveQueue.current;
+    },
+    [pushNotification, refreshProposals],
+  );
 
-    const costItems = existing
-      ? prev.costItems
-          .filter(
-            (entry) =>
-              entry.serviceId !== item.serviceId ||
-              entry.id === existing.id
-          )
-          .map((entry) =>
-            entry.id === existing.id ? updated : entry
-          )
-      : [updated, ...prev.costItems];
+  const addCostItem = useCallback(
+    (item: Omit<CostItem, 'id'>) => {
+      if (!activeProposal) {
+        pushNotification({
+          title: 'Sin propuesta activa',
+          message: 'Registra o selecciona una propuesta en Planificación antes de estimar costos.',
+          status: 'warning',
+        });
+        return;
+      }
+      const existing = activeProposal.costItems.find((entry) => entry.serviceId === item.serviceId);
+      const updated: CostItem = { ...item, id: existing?.id ?? uid('cost') };
+      const items = existing
+        ? activeProposal.costItems.map((entry) => (entry.id === existing.id ? updated : entry))
+        : [updated, ...activeProposal.costItems];
+      void persistCosts(activeProposal, items);
+    },
+    [activeProposal, persistCosts, pushNotification],
+  );
 
-    return {
-      ...prev,
-      costItems,
-    };
-  });
-}, []);
+  const removeCostItem = useCallback(
+    (id: string) => {
+      if (!activeProposal) return;
+      void persistCosts(activeProposal, activeProposal.costItems.filter((entry) => entry.id !== id));
+    },
+    [activeProposal, persistCosts],
+  );
 
-  const removeCostItem = useCallback((id: string) => {
-    setState((prev) => ({ ...prev, costItems: prev.costItems.filter((item) => item.id !== id) }));
-  }, []);
-
+  // "Restaurar": vuelve a los costos iniciales según los servicios de la propuesta
   const resetCostItems = useCallback(() => {
-    setState((prev) => ({ ...prev, costItems: buildDefaultCostItems() }));
-  }, []);
+    if (!activeProposal) return;
+    void persistCosts(activeProposal, buildProposalCostItems(activeProposal.services));
+  }, [activeProposal, persistCosts]);
 
   const markNotificationsRead = useCallback(() => {
     setState((prev) => ({
@@ -271,8 +351,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, notifications: [] }));
   }, []);
 
+  // Restablece solo lo local (región, modo oscuro, notificaciones); no borra datos de Supabase
   const resetAll = useCallback(() => {
-    setState({ ...defaultState, costItems: buildDefaultCostItems() });
+    setState(defaultState);
   }, []);
 
   const value: AppContextValue = {
@@ -282,10 +363,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     annualCost: monthlyCost * 12,
     activeServices,
     securityScore,
-    setRegionId,
-    toggleDarkMode,
+    proposals,
+    proposalsLoading,
+    proposalsError,
+    activeProposal,
+    costItems,
+    setActiveProposalId,
+    refreshProposals,
     addProposal,
     removeProposal,
+    setRegionId,
+    toggleDarkMode,
     addCostItem,
     removeCostItem,
     resetCostItems,

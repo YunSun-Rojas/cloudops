@@ -22,7 +22,6 @@ import {
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import SectionCard from '../components/SectionCard';
-import BarChart from '../components/BarChart';
 import DonutChart from '../components/DonutChart';
 import StatusBadge from '../components/StatusBadge';
 import { useApp } from '../context/AppContext';
@@ -39,7 +38,7 @@ export default function Dashboard() {
     annualCost,
     costItems,
     proposals,
-    activeServices,
+    activeProposal,
     securityScore,
   } = useApp();
 
@@ -51,12 +50,6 @@ export default function Dashboard() {
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 6);
-
-  const projection: ChartDatum[] = Array.from({ length: 6 }, (_, index) => ({
-    label: ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun'][index],
-    value: monthlyCost * (0.82 + index * 0.06),
-    color: index === 5 ? '#2563EB' : '#93C5FD',
-  }));
 
   const securitySummary = {
     ok: securityControls.filter((item) => item.status === 'ok').length,
@@ -71,38 +64,34 @@ export default function Dashboard() {
         ? 'ok'
         : 'warning';
 
-  const resources = [
-    {
-      label: 'Instancias EC2',
-      value: 2,
-      detail: 't3.medium con escalado automatico',
-    },
-    {
-      label: 'Buckets S3',
-      value: 3,
-      detail: 'Standard con versionado activo',
-    },
-    {
-      label: 'Bases RDS',
-      value: 1,
-      detail: 'MySQL Multi-AZ',
-    },
-    {
-      label: 'Distribuciones CloudFront',
-      value: 1,
-      detail: 'Origen protegido con WAF',
-    },
-    {
-      label: 'VPC',
-      value: 1,
-      detail: '2 subredes publicas y 2 privadas',
-    },
-    {
-      label: 'Zonas Route 53',
-      value: 1,
-      detail: 'Dominio app.cloudops.pe',
-    },
-  ];
+  const proposalDetails = activeProposal
+    ? [
+        { label: 'Propuesta', value: activeProposal.name, detail: activeProposal.appType },
+        {
+          label: 'Usuarios estimados',
+          value: numberFormat(activeProposal.estimatedUsers),
+          detail: 'Usuarios registrados en la propuesta',
+        },
+        {
+          label: 'Disponibilidad',
+          value: activeProposal.availability,
+          detail: 'Objetivo configurado',
+        },
+        { label: 'Objetivo', value: activeProposal.goal, detail: 'Meta de la propuesta' },
+        {
+          label: 'Servicios incluidos',
+          value: numberFormat(activeProposal.services.length),
+          detail: activeProposal.services
+            .map((serviceId) => getServiceById(serviceId)?.name ?? serviceId)
+            .join(', '),
+        },
+        {
+          label: 'Registrada',
+          value: new Date(activeProposal.createdAt).toLocaleDateString('es-PE'),
+          detail: activeProposal.regionId,
+        },
+      ]
+    : [];
 
   /**
    * Servicios AWS explicados de manera sencilla para el cliente.
@@ -209,7 +198,7 @@ export default function Dashboard() {
       [],
       ['Indicador', 'Valor'],
       ['Region seleccionada', `${region.name} (${region.location})`],
-      ['Servicios utilizados', `${activeServices.length} de ${awsServices.length}`],
+      ['Servicios utilizados', `${activeProposal?.services.length ?? 0} de ${awsServices.length}`],
       ['Costo mensual estimado', currency(monthlyCost)],
       ['Costo anual estimado', currency(annualCost)],
       ['Postura de seguridad', `${securityScore}%`],
@@ -252,7 +241,7 @@ export default function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Servicios utilizados"
-          value={`${activeServices.length} / ${awsServices.length}`}
+          value={`${activeProposal?.services.length ?? 0} / ${awsServices.length}`}
           hint="Servicios AWS incorporados a la solucion"
           icon={Boxes}
           tone="info"
@@ -287,28 +276,23 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <SectionCard
-          title="Proyeccion de gasto mensual"
-          description="Evolucion simulada del consumo en la region activa"
-          icon={TrendingUp}
-          className="lg:col-span-2"
-        >
-          <BarChart data={projection} />
-        </SectionCard>
-
-        <SectionCard
+      <SectionCard
           title="Distribucion por servicio"
-          description="Participacion de cada servicio en el gasto"
+          description="Distribución del costo mensual guardado para la propuesta activa"
           icon={Wallet}
         >
-          <DonutChart
-            data={costByService}
-            centerLabel="Gasto mensual"
-            centerValue={currency(monthlyCost)}
-          />
-        </SectionCard>
-      </div>
+          {costByService.length > 0 ? (
+            <DonutChart
+              data={costByService}
+              centerLabel="Gasto mensual"
+              centerValue={currency(monthlyCost)}
+            />
+          ) : (
+            <p className="py-10 text-center text-small text-muted dark:text-night-muted">
+              No hay líneas de costo guardadas para esta propuesta.
+            </p>
+          )}
+      </SectionCard>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <SectionCard
@@ -366,31 +350,35 @@ export default function Dashboard() {
         </SectionCard>
 
         <SectionCard
-          title="Recursos Cloud"
-          description="Inventario simulado desplegado en la propuesta"
+          title="Datos de la propuesta"
+          description="Información guardada para la propuesta activa"
           icon={Layers}
           className="lg:col-span-2"
         >
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {resources.map((resource) => (
-              <div
-                key={resource.label}
-                className="rounded-lg border border-line p-3 dark:border-night-line"
-              >
-                <p className="text-[22px] font-bold leading-tight text-ink dark:text-night-ink">
-                  {numberFormat(resource.value)}
-                </p>
-
-                <p className="text-small font-medium text-ink dark:text-night-ink">
-                  {resource.label}
-                </p>
-
-                <p className="text-[12px] text-muted dark:text-night-muted">
-                  {resource.detail}
-                </p>
-              </div>
-            ))}
-          </div>
+          {activeProposal ? (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {proposalDetails.map((detail) => (
+                <div
+                  key={detail.label}
+                  className="rounded-lg border border-line p-3 dark:border-night-line"
+                >
+                  <p className="break-words text-[18px] font-bold leading-tight text-ink dark:text-night-ink">
+                    {detail.value}
+                  </p>
+                  <p className="text-small font-medium text-ink dark:text-night-ink">
+                    {detail.label}
+                  </p>
+                  <p className="break-words text-[12px] text-muted dark:text-night-muted">
+                    {detail.detail}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="py-8 text-center text-small text-muted dark:text-night-muted">
+              Aún no hay una propuesta registrada.
+            </p>
+          )}
         </SectionCard>
       </div>
 
@@ -403,7 +391,13 @@ export default function Dashboard() {
         icon={Boxes}
       >
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {awsServiceConcepts.map((service) => {
+          {awsServiceConcepts
+            .filter((service) =>
+              activeProposal?.services.some(
+                (serviceId) => getServiceById(serviceId)?.name === service.name,
+              ),
+            )
+            .map((service) => {
             const Icon = service.icon;
 
             return (
@@ -436,7 +430,7 @@ export default function Dashboard() {
                 </div>
               </div>
             );
-          })}
+            })}
         </div>
       </SectionCard>
 
@@ -499,15 +493,15 @@ export default function Dashboard() {
             ) : (
               <div className="mt-2 space-y-2 text-small">
                 <p className="text-[16px] font-semibold text-ink dark:text-night-ink">
-                  {proposals[0].name}
+                  {activeProposal?.name}
                 </p>
 
                 <p className="text-muted dark:text-night-muted">
-                  {proposals[0].description}
+                  {activeProposal?.description}
                 </p>
 
                 <div className="flex flex-wrap gap-1.5 pt-1">
-                  {proposals[0].services.map((serviceId) => (
+                  {activeProposal?.services.map((serviceId) => (
                     <span
                       key={serviceId}
                       className="rounded-md border border-line bg-base px-2 py-0.5 text-[11px] dark:border-night-line dark:bg-night-bg"
@@ -518,9 +512,8 @@ export default function Dashboard() {
                 </div>
 
                 <p className="pt-1 text-muted dark:text-night-muted">
-                  Usuarios estimados:{' '}
-                  {numberFormat(proposals[0].estimatedUsers)} · Disponibilidad{' '}
-                  {proposals[0].availability}
+                  Usuarios estimados: {numberFormat(activeProposal?.estimatedUsers ?? 0)} ·
+                  {' '}Disponibilidad {activeProposal?.availability}
                 </p>
               </div>
             )}
