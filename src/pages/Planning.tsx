@@ -19,26 +19,7 @@
 
   const availabilities: Availability[] = ['99.0%', '99.9%', '99.95%', '99.99%'];
 
-  const handleDelete = async (id: number) => {
-    const confirmar = window.confirm(
-      '¿Deseas eliminar esta propuesta?'
-    );
-
-    if (!confirmar) return;
-
-    const { error } = await supabase
-      .from('propuestas_cloud')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.error('Error eliminando propuesta:', error);
-      alert('No se pudo eliminar la propuesta.');
-      return;
-    }
-
-    await loadProposals();
-  };
+  
 
   const goals: MigrationGoal[] = [
     'Reduccion de costos',
@@ -124,7 +105,27 @@
           : [...prev.services, id],
       }));
     };
+    
+    const handleDelete = async (id: number) => {
+    const confirmar = window.confirm(
+      '¿Deseas eliminar esta propuesta?'
+    );
 
+    if (!confirmar) return;
+
+    const { error } = await supabase
+      .from('propuestas_cloud')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Error eliminando propuesta:', error);
+      alert('No se pudo eliminar la propuesta.');
+      return;
+    }
+
+    await loadProposals();
+  };
     const validate = (): boolean => {
       const next: Record<string, string> = {};
       if (form.name.trim().length < 4) next.name = 'Escribe un nombre de al menos 4 caracteres.';
@@ -405,7 +406,7 @@
                       </button>
                     </div>
 
-                    <p className="mt-2 text-small text-muted dark:text-night-muted">{proposal.description}</p>
+                    <p className="mt-2 text-small text-muted dark:text-night-muted">{proposal.descripcion}</p>
 
                     <dl className="mt-3 grid grid-cols-2 gap-2 text-small">
                       <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
