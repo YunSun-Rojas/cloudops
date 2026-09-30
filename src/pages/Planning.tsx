@@ -86,8 +86,7 @@ export default function Planning() {
   const validate = (): boolean => {
     const next: Record<string, string> = {};
     if (form.name.trim().length < 4) next.name = 'Escribe un nombre de al menos 4 caracteres.';
-    if (form.description.trim().length < 15)
-      next.description = 'Describe la solucion con al menos 15 caracteres.';
+    if (!form.description.trim()) next.description = 'Escribe una descripción de la solución.';
     const users = Number(form.estimatedUsers);
     if (!form.estimatedUsers || Number.isNaN(users) || users <= 0)
       next.estimatedUsers = 'Indica un numero de usuarios mayor que cero.';
