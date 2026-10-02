@@ -33,14 +33,7 @@ import { useApp } from '../context/AppContext';
 import { awsServices, getServiceById } from '../data/awsServices';
 import { regions } from '../data/regions';
 import { securityControls } from '../data/security';
-import {
-  chartPalette,
-  compactCurrency,
-  currency,
-  dollarCurrency,
-  numberFormat,
-  today,
-} from '../utils/format';
+import { chartPalette, compactCurrency, currency, numberFormat, today } from '../utils/format';
 import { downloadCsv } from '../utils/report';
 import type { ChartDatum, Status } from '../types/cloud';
 
@@ -667,14 +660,36 @@ export default function Dashboard() {
           description="Estado de seguridad por categoría"
           icon={ShieldCheck}
         >
-          <DonutChart
-            data={costByService}
-            centerLabel="Gasto mensual"
-            centerValue={currency(monthlyCost)}
-            valueLabel="Mensual"
-            tooltipFormat={dollarCurrency}
-          />
+          <StackedBars rows={controlsByArea} />
+        </SectionCard>
+      </div>
 
+      <div className="grid gap-4 lg:grid-cols-2">
+        <SectionCard
+          title="Costo por región"
+          description="Mismo gasto mensual desplegado en cada región"
+          icon={MapPinned}
+        >
+          <HorizontalBarChart data={costByRegion} />
+        </SectionCard>
+
+        <SectionCard
+          title="Servicios por categoría"
+          description="Composición de la solución propuesta"
+          icon={PieChart}
+        >
+          {servicesByCategory.length > 0 ? (
+            <DonutChart
+              data={servicesByCategory}
+              centerLabel="Servicios"
+              centerValue={String(activeProposal?.services.length ?? 0)}
+              formatValue={(value) => `${value} serv.`}
+            />
+          ) : (
+            <p className="py-10 text-center text-small text-muted dark:text-night-muted">
+              Aún no hay servicios en la propuesta.
+            </p>
+          )}
         </SectionCard>
       </div>
 
