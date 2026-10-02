@@ -118,7 +118,7 @@ export interface NetworkNode {
   id: string;
   label: string;
   sublabel: string;
-  layer: 'internet' | 'dns' | 'cdn' | 'vpc' | 'subnet-public' | 'subnet-private';
+  layer: 'internet' | 'dns' | 'cdn' | 'vpc' | 'subnet-public' | 'subnet-private' | 'storage';
   icon: LucideIcon;
   detail: string;
 }

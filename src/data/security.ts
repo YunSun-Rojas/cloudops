@@ -1,5 +1,6 @@
-import { Cloud, Globe2, Gauge, Network, Server, Database, Lock } from 'lucide-react';
+import { Cloud, Globe2, Gauge, Network, Server, Database, Lock, HardDrive } from 'lucide-react';
 import type { IamEntity, NetworkNode, SecurityControl } from '../types/cloud';
+
 
 export const securityControls: SecurityControl[] = [
   {
@@ -215,5 +216,13 @@ export const networkNodes: NetworkNode[] = [
     layer: 'subnet-private',
     icon: Database,
     detail: 'Instancia primaria con replica en espera y respaldos automaticos de 7 dias.',
+  },
+    {
+    id: 's3',
+    label: 'S3 app-assets',
+    sublabel: 'Almacenamiento de objetos',
+    layer: 'storage',
+    icon: HardDrive,
+    detail: 'Bucket con versionado activo para archivos estaticos y respaldos de la aplicacion.',
   },
 ];

@@ -119,6 +119,7 @@ export default function Planning() {
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
+
     const users = Number(form.estimatedUsers);
 
     if (form.name.trim().length < 4) {
