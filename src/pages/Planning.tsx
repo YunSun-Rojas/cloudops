@@ -1,87 +1,163 @@
-import { useState } from 'react';
-import { ClipboardList, Table2, Trash2, Save, RotateCcw } from 'lucide-react';
-import SectionCard from '../components/SectionCard';
-import StatusBadge from '../components/StatusBadge';
-import { useApp } from '../context/AppContext';
-import { regions, getRegionById } from '../data/regions';
-import { awsServices, getServiceById } from '../data/awsServices';
-import { currency, numberFormat } from '../utils/format';
-import type { AppType, Availability, CloudProposal, MigrationGoal } from '../types/cloud';
+  import { useEffect, useState } from 'react';
+  import { supabase } from '../lib/supabase';
+  import { ClipboardList, Table2, Trash2, Save, RotateCcw } from 'lucide-react';
+  import SectionCard from '../components/SectionCard';
+  import StatusBadge from '../components/StatusBadge';
+  import ViewToggle, { type ViewMode } from '../components/ViewToggle';
+  import { useApp } from '../context/AppContext';
+  import { regions, getRegionById } from '../data/regions';
+  import { awsServices, getServiceById } from '../data/awsServices';
+  import { numberFormat } from '../utils/format';
+  import type { AppType, Availability, MigrationGoal } from '../types/cloud';
 
-const appTypes: AppType[] = [
-  'Aplicacion web',
-  'API / Microservicios',
-  'Aplicacion movil',
-  'Analitica de datos',
-  'Comercio electronico',
-];
+  const appTypes: AppType[] = [
+    'Aplicacion web',
+    'API / Microservicios',
+    'Aplicacion movil',
+    'Analitica de datos',
+    'Comercio electronico',
+  ];
 
-const availabilities: Availability[] = ['99.0%', '99.9%', '99.95%', '99.99%'];
+  const availabilities: Availability[] = ['99.0%', '99.9%', '99.95%', '99.99%'];
 
-const goals: MigrationGoal[] = [
-  'Reduccion de costos',
-  'Escalabilidad',
-  'Alta disponibilidad',
-  'Modernizacion de la aplicacion',
-  'Mejora de seguridad',
-];
+  
 
-interface FormState {
-  name: string;
-  appType: AppType;
-  description: string;
-  regionId: string;
-  estimatedUsers: string;
-  availability: Availability;
-  services: string[];
-  goal: MigrationGoal;
-}
+  const goals: MigrationGoal[] = [
+    'Reduccion de costos',
+    'Escalabilidad',
+    'Alta disponibilidad',
+    'Modernizacion de la aplicacion',
+    'Mejora de seguridad',
+  ];
 
-const emptyForm: FormState = {
-  name: '',
-  appType: 'Aplicacion web',
-  description: '',
-  regionId: 'us-east-1',
-  estimatedUsers: '',
-  availability: '99.9%',
-  services: [],
-  goal: 'Escalabilidad',
-};
-
-/** Costo mensual de una propuesta: sus costos base por el factor de su región */
-const monthlyOf = (proposal: CloudProposal) =>
-  proposal.costItems.reduce((total, item) => total + item.monthlyCost, 0) *
-  getRegionById(proposal.regionId).costFactor;
-
-export default function Planning() {
-  const {
-    regionId,
-    proposals,
-    proposalsLoading,
-    proposalsError,
-    activeProposal,
-    addProposal,
-    removeProposal,
-    setActiveProposalId,
-  } = useApp();
-  const [form, setForm] = useState<FormState>({ ...emptyForm, regionId });
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  const toggleService = (id: string) => {
-    setForm((prev) => ({
-      ...prev,
-      services: prev.services.includes(id)
-        ? prev.services.filter((item) => item !== id)
-        : [...prev.services, id],
-    }));
+  /**
+   * Presets por tipo de aplicacion: al elegir un tipo se autocompleta la
+   * descripcion y se autoseleccionan los servicios Cloud recomendados.
+   */
+  const appTypePresets: Record<AppType, { description: string; services: string[] }> = {
+    'Aplicacion web': {
+      description:
+        'Aplicacion web de tres capas desplegada en AWS: instancias EC2 detras de CloudFront, base de datos RDS Multi-AZ y almacenamiento de archivos en S3, aislada en una VPC con subredes publicas y privadas.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront'],
+    },
+    'API / Microservicios': {
+      description:
+        'API REST y microservicios sobre EC2 con escalado automatico, base de datos RDS, identidades y permisos gestionados con IAM y monitoreo centralizado en CloudWatch dentro de una VPC dedicada.',
+      services: ['ec2', 'rds', 'iam', 'vpc', 'route53', 'cloudwatch'],
+    },
+    'Aplicacion movil': {
+      description:
+        'Backend para aplicacion movil con endpoints en EC2, autenticacion y permisos con IAM, persistencia en RDS, almacenamiento de imagenes en S3 y distribucion de contenido por CloudFront.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront', 'cloudwatch'],
+    },
+    'Analitica de datos': {
+      description:
+        'Plataforma de analitica de datos con data lake en S3, procesamiento sobre EC2, base de datos RDS para los resultados y tableros monitoreados con CloudWatch en una VPC segura.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'cloudwatch'],
+    },
+    'Comercio electronico': {
+      description:
+        'Tienda en linea de alta disponibilidad con servidores EC2 escalables, catalogo y contenido en S3, datos transaccionales en RDS Multi-AZ, entrega por CloudFront y seguridad con IAM.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront', 'cloudwatch'],
+    },
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('¿Deseas eliminar esta propuesta y sus costos?')) return;
-    await removeProposal(id);
+  interface FormState {
+    name: string;
+    appType: AppType;
+    description: string;
+    regionId: string;
+    estimatedUsers: string;
+    availability: Availability;
+    services: string[];
+    goal: MigrationGoal;
+  }
+
+  interface ProposalDB {
+    id: number;
+    nombre: string;
+    descripcion: string;
+    region: string;
+    costo_estimado: number;
+    estado: string;
+    tipo_aplicacion: AppType;
+    usuarios_estimados: number;
+    disponibilidad: Availability;
+    objetivo: MigrationGoal;
+
+    configuracion: {
+      servicios: string[];
+    };
+
+    created_at: string;
+  }
+
+  const emptyForm: FormState = {
+    name: '',
+    appType: 'Aplicacion web',
+    description: '',
+    regionId: 'us-east-1',
+    estimatedUsers: '',
+    availability: '99.9%',
+    services: [],
+    goal: 'Escalabilidad',
   };
+
+  export default function Planning() {
+    const { regionId } = useApp();
+    const [proposals, setProposals] = useState<ProposalDB[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [form, setForm] = useState<FormState>({ ...emptyForm, regionId });
+    const [errors, setErrors] = useState<Record<string, string>>({});
+    const [saved, setSaved] = useState(false);
+    const [view, setView] = useState<ViewMode>('cards');
+
+    const loadProposals = async () => { setLoading(true);
+
+    const { data, error } = await supabase
+      .from('propuestas_cloud')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error cargando propuestas:', error);
+      setLoading(false);
+      return;
+    }
+
+    setProposals((data ?? []) as ProposalDB[]);
+    setLoading(false);
+  };
+    useEffect(() => {
+      loadProposals();
+    }, []);
+
+    const handleAppTypeChange = (value: AppType) => {
+      const preset = appTypePresets[value];
+      setForm((prev) => ({
+        ...prev,
+        appType: value,
+        description: preset.description,
+        services: preset.services,
+      }));
+    };
+
+    const toggleService = (id: string) => {
+      setForm((prev) => ({
+        ...prev,
+        services: prev.services.includes(id)
+          ? prev.services.filter((item) => item !== id)
+          : [...prev.services, id],
+      }));
+    };
+    
+    const handleDelete = async (id: number) => {
+    const confirmar = window.confirm(
+      '¿Deseas eliminar esta propuesta?'
+    );
+
+    if (!confirmar) return;
+
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
@@ -155,55 +231,22 @@ export default function Planning() {
               {errors.name && <p className="mt-1 text-[12px] text-alert">{errors.name}</p>}
             </div>
 
-            <div>
-              <label className="label-field" htmlFor="appType">
-                Tipo de aplicacion
-              </label>
-              <select
-                id="appType"
-                className="input-field"
-                value={form.appType}
-                onChange={(event) => setForm({ ...form, appType: event.target.value as AppType })}
-              >
-                {appTypes.map((type) => (
-                  <option key={type}>{type}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+              <div>
+                <label className="label-field" htmlFor="appType">
+                  Tipo de aplicacion
+                </label>
+                <select
+                  id="appType"
+                  className="input-field"
+                  value={form.appType}
+                  onChange={(event) => handleAppTypeChange(event.target.value as AppType)}
+                >
+                  {appTypes.map((type) => (
+                    <option key={type}>{type}</option>
+                  ))}
+                </select>
+              </div>
 
-          <div>
-            <label className="label-field" htmlFor="description">
-              Descripcion
-            </label>
-            <textarea
-              id="description"
-              rows={3}
-              className="input-field resize-y"
-              value={form.description}
-              onChange={(event) => setForm({ ...form, description: event.target.value })}
-              placeholder="Describe el alcance funcional y tecnico de la solucion"
-            />
-            {errors.description && <p className="mt-1 text-[12px] text-alert">{errors.description}</p>}
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <label className="label-field" htmlFor="regionId">
-                Region seleccionada
-              </label>
-              <select
-                id="regionId"
-                className="input-field"
-                value={form.regionId}
-                onChange={(event) => setForm({ ...form, regionId: event.target.value })}
-              >
-                {regions.map((region) => (
-                  <option key={region.id} value={region.id}>
-                    {region.name} - {region.location}
-                  </option>
-                ))}
-              </select>
             </div>
 
             <div>
@@ -257,73 +300,37 @@ export default function Planning() {
                 ))}
               </select>
             </div>
-          </div>
 
-          <fieldset>
-            <legend className="label-field">Servicios Cloud seleccionados</legend>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {awsServices.map((service) => {
-                const checked = form.services.includes(service.id);
-                return (
-                  <label
-                    key={service.id}
-                    className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-3 text-small transition-colors ${
-                      checked
-                        ? 'border-brand bg-brand/5 text-ink dark:text-night-ink'
-                        : 'border-line text-muted hover:border-brand/50 dark:border-night-line dark:text-night-muted'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-brand"
-                      checked={checked}
-                      onChange={() => toggleService(service.id)}
-                    />
-                    <span className="truncate font-medium">{service.name}</span>
-                  </label>
-                );
-              })}
+          </form>
+        </SectionCard>
+
+        <SectionCard
+          title="Propuestas registradas"
+          description="Informacion consolidada de las soluciones planificadas"
+          icon={Table2}
+          action={
+            <div className="flex flex-wrap items-center gap-3">
+              <ViewToggle view={view} onChange={setView} />
+              <StatusBadge status="info" label={`${proposals.length} registro(s)`} />
             </div>
-            {errors.services && <p className="mt-1 text-[12px] text-alert">{errors.services}</p>}
-          </fieldset>
+          }
+        >
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button type="submit" className="btn-primary" disabled={saving}>
-              <Save size={16} /> {saving ? 'Guardando...' : 'Guardar propuesta'}
-            </button>
-            {saved && <StatusBadge status="ok" label="Propuesta registrada" />}
-          </div>
-        </form>
-      </SectionCard>
+          {loading ? (
+            <p className="py-10 text-center text-small text-muted">
+              Cargando propuestas...
+            </p>
+          ) : proposals.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-line py-10 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
+              No hay propuestas registradas. Completa el formulario para agregar la primera.
+            </p>
+          ) : (
+            <>
+              {view === 'cards' ? (
+              <div className="grid gap-4 xl:grid-cols-2">
+                {proposals.map((proposal) => (
+                  <article key={proposal.id} className="rounded-card border border-line p-4 dark:border-night-line">
 
-      <SectionCard
-        title="Propuestas registradas"
-        description="Informacion consolidada de las soluciones planificadas"
-        icon={Table2}
-        action={<StatusBadge status="info" label={`${proposals.length} registro(s)`} />}
-      >
-        {proposalsError && (
-          <p className="mb-3 text-small text-alert">No se pudieron cargar las propuestas: {proposalsError}</p>
-        )}
-
-        {proposalsLoading && proposals.length === 0 ? (
-          <p className="py-10 text-center text-small text-muted">Cargando propuestas...</p>
-        ) : proposals.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-line py-10 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
-            No hay propuestas registradas. Completa el formulario para agregar la primera.
-          </p>
-        ) : (
-          <>
-            <div className="grid gap-4 xl:grid-cols-2">
-              {proposals.map((proposal) => {
-                const isActive = proposal.id === activeProposal?.id;
-                return (
-                  <article
-                    key={proposal.id}
-                    className={`rounded-card border p-4 ${
-                      isActive ? 'border-brand' : 'border-line dark:border-night-line'
-                    }`}
-                  >
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-[16px] font-semibold text-ink dark:text-night-ink">
@@ -395,46 +402,46 @@ export default function Planning() {
                       )}
                     </div>
                   </article>
-                );
-              })}
-            </div>
 
-            <div className="mt-6 overflow-x-auto">
-              <table className="w-full min-w-[720px] border-collapse text-small">
-                <thead>
-                  <tr className="border-b border-line text-left text-muted dark:border-night-line dark:text-night-muted">
-                    <th className="py-2.5 pr-4 font-medium">Solucion</th>
-                    <th className="py-2.5 pr-4 font-medium">Tipo</th>
-                    <th className="py-2.5 pr-4 font-medium">Region</th>
-                    <th className="py-2.5 pr-4 font-medium">Usuarios</th>
-                    <th className="py-2.5 pr-4 font-medium">Disponibilidad</th>
-                    <th className="py-2.5 pr-4 font-medium">Servicios</th>
-                    <th className="py-2.5 pr-4 font-medium">Costo mensual</th>
-                    <th className="py-2.5 font-medium">Objetivo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {proposals.map((proposal) => (
-                    <tr
-                      key={proposal.id}
-                      className="border-b border-line text-ink dark:border-night-line dark:text-night-ink"
-                    >
-                      <td className="py-2.5 pr-4 font-medium">{proposal.name}</td>
-                      <td className="py-2.5 pr-4">{proposal.appType}</td>
-                      <td className="py-2.5 pr-4">{proposal.regionId}</td>
-                      <td className="py-2.5 pr-4">{numberFormat(proposal.estimatedUsers)}</td>
-                      <td className="py-2.5 pr-4">{proposal.availability}</td>
-                      <td className="py-2.5 pr-4">{proposal.services.length}</td>
-                      <td className="py-2.5 pr-4">{currency(monthlyOf(proposal))}</td>
-                      <td className="py-2.5">{proposal.goal}</td>
+                ))}
+              </div>
+              ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[720px] border-collapse text-small">
+                  <thead>
+                    <tr className="border-b border-line text-left text-muted dark:border-night-line dark:text-night-muted">
+                      <th className="py-2.5 pr-4 font-medium">Solucion</th>
+                      <th className="py-2.5 pr-4 font-medium">Tipo</th>
+                      <th className="py-2.5 pr-4 font-medium">Region</th>
+                      <th className="py-2.5 pr-4 font-medium">Usuarios</th>
+                      <th className="py-2.5 pr-4 font-medium">Disponibilidad</th>
+                      <th className="py-2.5 pr-4 font-medium">Servicios</th>
+                      <th className="py-2.5 font-medium">Objetivo</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </SectionCard>
-    </div>
-  );
-}
+                  </thead>
+                  <tbody>
+                    {proposals.map((proposal) => (
+                      <tr
+                        key={proposal.id}
+                        className="border-b border-line text-ink dark:border-night-line dark:text-night-ink"
+                      >
+                        <td className="py-2.5 pr-4 font-medium">{proposal.nombre}</td>
+                        <td className="py-2.5 pr-4">{proposal.tipo_aplicacion}</td>
+                        <td className="py-2.5 pr-4">{proposal.region}</td>
+                        <td className="py-2.5 pr-4">{numberFormat(proposal.usuarios_estimados)}</td>
+                        <td className="py-2.5 pr-4">{proposal.disponibilidad}</td>
+                        <td className="py-2.5 pr-4">{proposal.configuracion?.servicios?.length ?? 0}</td>
+                        <td className="py-2.5">{proposal.objetivo}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              )}
+            </>
+          )}
+        </SectionCard>
+      </div>
+    );
+  }
+

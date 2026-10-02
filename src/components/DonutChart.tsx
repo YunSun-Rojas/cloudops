@@ -7,6 +7,10 @@ interface DonutChartProps {
   centerLabel: string;
   centerValue: string;
   formatValue?: (value: number) => string;
+  /** Etiqueta que precede al valor en el tooltip (p. ej. "Mensual"). */
+  valueLabel?: string;
+  /** Formateador exclusivo del tooltip; si no se indica, usa formatValue. */
+  tooltipFormat?: (value: number) => string;
 }
 
 const polar = (cx: number, cy: number, r: number, angle: number) => {
@@ -34,6 +38,8 @@ export default function DonutChart({
   centerLabel,
   centerValue,
   formatValue = currency,
+  valueLabel,
+  tooltipFormat,
 }: DonutChartProps) {
   const [active, setActive] = useState<number | null>(null);
   const total = data.reduce((sum, item) => sum + item.value, 0) || 1;
@@ -59,7 +65,7 @@ export default function DonutChart({
             onMouseEnter={() => setActive(index)}
             onMouseLeave={() => setActive(null)}
           >
-            <title>{`${slice.label}: ${formatValue(slice.value)}`}</title>
+            <title>{`${valueLabel ? `${valueLabel}: ` : `${slice.label}: `}${(tooltipFormat ?? formatValue)(slice.value)}`}</title>
           </path>
         ))}
         <text
