@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Boxes,
@@ -19,6 +20,10 @@ import {
   LockKeyhole,
   Route,
   Shield,
+  BarChart3,
+  LineChart,
+  PieChart,
+  MapPinned,
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import SectionCard from '../components/SectionCard';
@@ -26,10 +31,293 @@ import DonutChart from '../components/DonutChart';
 import StatusBadge from '../components/StatusBadge';
 import { useApp } from '../context/AppContext';
 import { awsServices, getServiceById } from '../data/awsServices';
+import { regions } from '../data/regions';
 import { securityControls } from '../data/security';
-import { chartPalette, currency, numberFormat, today } from '../utils/format';
+import { chartPalette, compactCurrency, currency, numberFormat, today } from '../utils/format';
 import { downloadCsv } from '../utils/report';
 import type { ChartDatum, Status } from '../types/cloud';
+
+/* =========================================================
+   GRAFICOS DEL DASHBOARD (SVG propio, sin librerias)
+   ========================================================= */
+
+/* ---------- Barras horizontales (ranking) ---------- */
+
+interface HBarProps {
+  data: (ChartDatum & { highlight?: boolean; note?: string })[];
+  formatValue?: (value: number) => string;
+  showPercent?: boolean;
+}
+
+function HorizontalBarChart({ data, formatValue = currency, showPercent = false }: HBarProps) {
+  const max = Math.max(...data.map((d) => d.value), 1);
+  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+
+  return (
+    <ul className="space-y-3" role="img" aria-label="Grafico de barras horizontales">
+      {data.map((item) => (
+        <li key={item.label}>
+          <div className="mb-1 flex items-baseline justify-between gap-3 text-small">
+            <span
+              className={`truncate ${
+                item.highlight ? 'font-semibold text-brand' : 'text-ink dark:text-night-ink'
+              }`}
+            >
+              {item.label}
+              {item.note && (
+                <span className="ml-2 text-[11px] font-normal text-muted dark:text-night-muted">
+                  {item.note}
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 font-semibold text-ink dark:text-night-ink">
+              {formatValue(item.value)}
+              {showPercent && (
+                <span className="ml-2 text-[11px] font-medium text-muted dark:text-night-muted">
+                  {((item.value / total) * 100).toFixed(0)}%
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-line dark:bg-night-line">
+            <div
+              className="h-full rounded-full transition-all duration-700"
+              style={{
+                width: `${Math.max((item.value / max) * 100, 2)}%`,
+                background: item.color,
+                outline: item.highlight ? `2px solid ${item.color}33` : undefined,
+              }}
+            />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/* ---------- Area / linea (proyeccion acumulada) ---------- */
+
+interface AreaChartProps {
+  labels: string[];
+  values: number[];
+  color?: string;
+  formatValue?: (value: number) => string;
+}
+
+function AreaChart({ labels, values, color = '#2563EB', formatValue = currency }: AreaChartProps) {
+  const [active, setActive] = useState<number | null>(null);
+
+  const W = 640;
+  const H = 240;
+  const pad = { top: 16, right: 16, bottom: 28, left: 56 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+  const max = Math.max(...values, 1);
+  const stepX = values.length > 1 ? innerW / (values.length - 1) : innerW;
+
+  const x = (i: number) => pad.left + i * stepX;
+  const y = (v: number) => pad.top + innerH - (v / max) * innerH;
+
+  const line = values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${x(i)} ${y(v)}`).join(' ');
+  const area = `${line} L ${x(values.length - 1)} ${pad.top + innerH} L ${x(0)} ${pad.top + innerH} Z`;
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  const gradId = `area-grad-${color.replace('#', '')}`;
+
+  const tipW = 150;
+  const tipX = active === null ? 0 : Math.min(Math.max(x(active) - tipW / 2, pad.left), W - pad.right - tipW);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Grafico de area">
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+
+      {ticks.map((t) => (
+        <g key={t}>
+          <line
+            x1={pad.left}
+            x2={W - pad.right}
+            y1={y(max * t)}
+            y2={y(max * t)}
+            className="stroke-line dark:stroke-night-line"
+            strokeDasharray={t === 0 ? undefined : '3 4'}
+          />
+          <text
+            x={pad.left - 8}
+            y={y(max * t) + 4}
+            textAnchor="end"
+            className="fill-current text-muted"
+            style={{ fontSize: '11px' }}
+          >
+            {compactCurrency(max * t)}
+          </text>
+        </g>
+      ))}
+
+      <path d={area} fill={`url(#${gradId})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+
+      {labels.map((label, i) => (
+        <text
+          key={label}
+          x={x(i)}
+          y={H - 8}
+          textAnchor="middle"
+          className="fill-current text-muted"
+          style={{ fontSize: '11px' }}
+        >
+          {label}
+        </text>
+      ))}
+
+      {values.map((v, i) => (
+        <g key={i} onMouseEnter={() => setActive(i)} onMouseLeave={() => setActive(null)}>
+          <rect
+            x={x(i) - stepX / 2}
+            y={pad.top}
+            width={stepX}
+            height={innerH}
+            fill="transparent"
+            className="cursor-pointer"
+          />
+          <circle
+            cx={x(i)}
+            cy={y(v)}
+            r={active === i ? 5.5 : 3}
+            fill="white"
+            stroke={color}
+            strokeWidth="2"
+            className="transition-all duration-150"
+          />
+        </g>
+      ))}
+
+      {active !== null && (
+        <g pointerEvents="none">
+          <line x1={x(active)} x2={x(active)} y1={pad.top} y2={pad.top + innerH} stroke={color} strokeOpacity="0.4" />
+          <rect x={tipX} y={pad.top} width={tipW} height={40} rx={8} fill="#0F172A" opacity="0.92" />
+          <text x={tipX + 10} y={pad.top + 16} fill="#CBD5E1" style={{ fontSize: '11px' }}>
+            Acumulado al {labels[active]}
+          </text>
+          <text x={tipX + 10} y={pad.top + 32} fill="#FFFFFF" style={{ fontSize: '13px', fontWeight: 700 }}>
+            {formatValue(values[active])}
+          </text>
+        </g>
+      )}
+    </svg>
+  );
+}
+
+/* ---------- Medidor semicircular (gauge) ---------- */
+
+interface GaugeProps {
+  value: number; // 0 - 100
+  label: string;
+  color?: string;
+}
+
+function GaugeChart({ value, label, color }: GaugeProps) {
+  const pct = Math.min(Math.max(value, 0), 100);
+  const tone = color ?? (pct >= 80 ? '#16A34A' : pct >= 60 ? '#F59E0B' : '#DC2626');
+  const R = 80;
+  const C = Math.PI * R; // longitud del semicirculo
+  const d = `M ${100 - R} 100 A ${R} ${R} 0 0 1 ${100 + R} 100`;
+
+  return (
+    <svg viewBox="0 0 200 118" className="mx-auto h-auto w-full max-w-[260px]" role="img" aria-label={label}>
+      <path d={d} fill="none" strokeWidth="16" strokeLinecap="round" className="stroke-line dark:stroke-night-line" />
+      <path
+        d={d}
+        fill="none"
+        stroke={tone}
+        strokeWidth="16"
+        strokeLinecap="round"
+        strokeDasharray={C}
+        strokeDashoffset={C - (C * pct) / 100}
+        style={{ transition: 'stroke-dashoffset 0.8s ease-out' }}
+      />
+      <text
+        x="100"
+        y="88"
+        textAnchor="middle"
+        className="fill-current text-ink dark:text-night-ink"
+        style={{ fontSize: '30px', fontWeight: 700 }}
+      >
+        {pct}%
+      </text>
+      <text x="100" y="108" textAnchor="middle" className="fill-current text-muted" style={{ fontSize: '11px' }}>
+        {label}
+      </text>
+      <text x={100 - R} y="116" textAnchor="middle" className="fill-current text-muted" style={{ fontSize: '9px' }}>
+        0
+      </text>
+      <text x={100 + R} y="116" textAnchor="middle" className="fill-current text-muted" style={{ fontSize: '9px' }}>
+        100
+      </text>
+    </svg>
+  );
+}
+
+/* ---------- Barras apiladas (controles por area) ---------- */
+
+interface StackedRow {
+  label: string;
+  ok: number;
+  warning: number;
+  danger: number;
+}
+
+function StackedBars({ rows }: { rows: StackedRow[] }) {
+  return (
+    <div>
+      <ul className="space-y-3.5">
+        {rows.map((row) => {
+          const total = row.ok + row.warning + row.danger || 1;
+          const segments = [
+            { key: 'ok', value: row.ok, color: '#16A34A', name: 'Correctos' },
+            { key: 'warning', value: row.warning, color: '#F59E0B', name: 'En revision' },
+            { key: 'danger', value: row.danger, color: '#DC2626', name: 'Con problema' },
+          ].filter((s) => s.value > 0);
+
+          return (
+            <li key={row.label}>
+              <div className="mb-1 flex items-baseline justify-between text-small">
+                <span className="truncate text-ink dark:text-night-ink">{row.label}</span>
+                <span className="text-[11px] text-muted dark:text-night-muted">{total} controles</span>
+              </div>
+              <div className="flex h-3 w-full gap-0.5 overflow-hidden rounded-full bg-line dark:bg-night-line">
+                {segments.map((s) => (
+                  <div
+                    key={s.key}
+                    className="h-full first:rounded-l-full last:rounded-r-full transition-all duration-700"
+                    style={{ width: `${(s.value / total) * 100}%`, background: s.color }}
+                    title={`${s.name}: ${s.value}`}
+                  />
+                ))}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted dark:text-night-muted">
+        {[
+          ['#16A34A', 'Correctos'],
+          ['#F59E0B', 'En revision'],
+          ['#DC2626', 'Con problema'],
+        ].map(([c, n]) => (
+          <span key={n} className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-sm" style={{ background: c }} />
+            {n}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const {
@@ -50,6 +338,47 @@ export default function Dashboard() {
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 6);
+
+  /** Costo acumulado mes a mes durante 12 meses */
+  const monthLabels = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12'];
+  const cumulativeCost = monthLabels.map((_, index) => monthlyCost * (index + 1));
+
+  /** Comparacion del costo mensual de la propuesta en cada region */
+  const baseMonthlyCost = costItems.reduce((total, item) => total + item.monthlyCost, 0);
+  const costByRegion = regions
+    .map((item) => ({
+      label: item.name,
+      value: baseMonthlyCost * item.costFactor,
+      color: item.id === region.id ? '#2563EB' : '#94A3B8',
+      highlight: item.id === region.id,
+      note: item.id === region.id ? 'seleccionada' : undefined,
+    }))
+    .sort((a, b) => a.value - b.value);
+
+  /** Servicios de la propuesta agrupados por categoria */
+  const servicesByCategory: ChartDatum[] = Object.entries(
+    (activeProposal?.services ?? []).reduce<Record<string, number>>((acc, serviceId) => {
+      const category = getServiceById(serviceId)?.category ?? 'Otros';
+      acc[category] = (acc[category] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).map(([label, value], index) => ({
+    label,
+    value,
+    color: chartPalette[index % chartPalette.length],
+  }));
+
+  /** Controles de seguridad por area */
+  const controlsByArea: StackedRow[] = Object.values(
+    securityControls.reduce<Record<string, StackedRow>>((acc, control) => {
+      const row = acc[control.area] ?? { label: control.area, ok: 0, warning: 0, danger: 0 };
+      if (control.status === 'ok' || control.status === 'warning' || control.status === 'danger') {
+        row[control.status] += 1;
+      }
+      acc[control.area] = row;
+      return acc;
+    }, {}),
+  );
 
   const securitySummary = {
     ok: securityControls.filter((item) => item.status === 'ok').length,
@@ -276,7 +605,8 @@ export default function Dashboard() {
         />
       </div>
 
-      <SectionCard
+      <div className="grid gap-4 lg:grid-cols-2">
+        <SectionCard
           title="Distribucion por servicio"
           description="Distribución del costo mensual guardado para la propuesta activa"
           icon={Wallet}
@@ -292,7 +622,76 @@ export default function Dashboard() {
               No hay líneas de costo guardadas para esta propuesta.
             </p>
           )}
-      </SectionCard>
+        </SectionCard>
+
+        <SectionCard
+          title="Ranking de costos"
+          description="Servicios que más pesan en el gasto mensual"
+          icon={BarChart3}
+        >
+          {costByService.length > 0 ? (
+            <HorizontalBarChart data={costByService} showPercent />
+          ) : (
+            <p className="py-10 text-center text-small text-muted dark:text-night-muted">
+              Sin datos de costo para mostrar.
+            </p>
+          )}
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <SectionCard
+          title="Proyección de gasto a 12 meses"
+          description="Costo acumulado mes a mes sin descuentos"
+          icon={LineChart}
+          className="lg:col-span-2"
+        >
+          {monthlyCost > 0 ? (
+            <AreaChart labels={monthLabels} values={cumulativeCost} />
+          ) : (
+            <p className="py-10 text-center text-small text-muted dark:text-night-muted">
+              Sin datos de costo para proyectar.
+            </p>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Controles por área"
+          description="Estado de seguridad por categoría"
+          icon={ShieldCheck}
+        >
+          <StackedBars rows={controlsByArea} />
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <SectionCard
+          title="Costo por región"
+          description="Mismo gasto mensual desplegado en cada región"
+          icon={MapPinned}
+        >
+          <HorizontalBarChart data={costByRegion} />
+        </SectionCard>
+
+        <SectionCard
+          title="Servicios por categoría"
+          description="Composición de la solución propuesta"
+          icon={PieChart}
+        >
+          {servicesByCategory.length > 0 ? (
+            <DonutChart
+              data={servicesByCategory}
+              centerLabel="Servicios"
+              centerValue={String(activeProposal?.services.length ?? 0)}
+              formatValue={(value) => `${value} serv.`}
+            />
+          ) : (
+            <p className="py-10 text-center text-small text-muted dark:text-night-muted">
+              Aún no hay servicios en la propuesta.
+            </p>
+          )}
+        </SectionCard>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <SectionCard
@@ -307,12 +706,7 @@ export default function Dashboard() {
           }
         >
           <div className="space-y-3">
-            <div className="h-2.5 w-full overflow-hidden rounded-full bg-line dark:bg-night-line">
-              <div
-                className="h-full rounded-full bg-security transition-all duration-700"
-                style={{ width: `${securityScore}%` }}
-              />
-            </div>
+            <GaugeChart value={securityScore} label="Postura de seguridad" />
 
             <ul className="space-y-2 text-small">
               <li className="flex items-center justify-between rounded-lg bg-base px-3 py-2 dark:bg-night-bg">
