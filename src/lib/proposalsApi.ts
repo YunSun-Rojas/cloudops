@@ -221,12 +221,8 @@ export async function saveProposalCosts(
   if (totalError) throw totalError;
 }
 
-/** Inserta la propuesta y, enseguida, sus recursos y costos iniciales. Devuelve el id nuevo. */
-export async function insertProposal(
-  proposal: NewProposal,
-  costItems: CostItem[],
-  costFactor: number,
-): Promise<string> {
+/** Inserta solo los requisitos de la propuesta; los recursos y costos se crean desde Costos. */
+export async function insertProposal(proposal: NewProposal): Promise<string> {
   const { data, error } = await supabase
     .from('propuestas_cloud')
     .insert({
@@ -238,16 +234,14 @@ export async function insertProposal(
       disponibilidad: proposal.availability,
       objetivo: proposal.goal,
       estado: 'planificado',
-      costo_estimado: monthlyTotal(costItems, costFactor),
+      costo_estimado: 0,
       configuracion: { servicios: proposal.services },
     })
     .select('id')
     .single();
   if (error) throw error;
 
-  const id = String((data as { id: number }).id);
-  await saveProposalCosts({ id, name: proposal.name, regionId: proposal.regionId }, costItems, costFactor);
-  return id;
+  return String((data as { id: number }).id);
 }
 
 /** Borra primero los costos y recursos de la propuesta, y al final la propuesta */

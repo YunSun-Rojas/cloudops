@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { ClipboardList, Table2, Trash2, Save, RotateCcw } from 'lucide-react';
+import { useState, type FormEvent } from 'react';
+import { ClipboardList, RotateCcw, Table2, Trash2 } from 'lucide-react';
 import SectionCard from '../components/SectionCard';
 import StatusBadge from '../components/StatusBadge';
+import ViewToggle, { type ViewMode } from '../components/ViewToggle';
 import { useApp } from '../context/AppContext';
 import { regions, getRegionById } from '../data/regions';
 import { awsServices, getServiceById } from '../data/awsServices';
-import { currency, numberFormat } from '../utils/format';
-import type { AppType, Availability, CloudProposal, MigrationGoal } from '../types/cloud';
+import { numberFormat } from '../utils/format';
+import type { AppType, Availability, MigrationGoal } from '../types/cloud';
 
 const appTypes: AppType[] = [
   'Aplicacion web',
@@ -25,6 +26,34 @@ const goals: MigrationGoal[] = [
   'Modernizacion de la aplicacion',
   'Mejora de seguridad',
 ];
+
+const appTypePresets: Record<AppType, { description: string; services: string[] }> = {
+  'Aplicacion web': {
+    description:
+      'Aplicacion web de tres capas desplegada en AWS: instancias EC2 detras de CloudFront, base de datos RDS Multi-AZ y almacenamiento en S3 dentro de una VPC.',
+    services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront'],
+  },
+  'API / Microservicios': {
+    description:
+      'API y microservicios sobre EC2 con base de datos RDS, permisos gestionados con IAM y monitoreo en CloudWatch dentro de una VPC.',
+    services: ['ec2', 'rds', 'iam', 'vpc', 'route53', 'cloudwatch'],
+  },
+  'Aplicacion movil': {
+    description:
+      'Backend para aplicacion movil con computo, autenticacion, persistencia y distribucion de contenido.',
+    services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront', 'cloudwatch'],
+  },
+  'Analitica de datos': {
+    description:
+      'Plataforma de analitica de datos con almacenamiento, procesamiento y monitoreo.',
+    services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'cloudwatch'],
+  },
+  'Comercio electronico': {
+    description:
+      'Tienda en linea con computo, almacenamiento, base de datos y distribucion de contenido.',
+    services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront', 'cloudwatch'],
+  },
+};
 
 interface FormState {
   name: string;
@@ -48,11 +77,6 @@ const emptyForm: FormState = {
   goal: 'Escalabilidad',
 };
 
-/** Costo mensual de una propuesta: sus costos base por el factor de su región */
-const monthlyOf = (proposal: CloudProposal) =>
-  proposal.costItems.reduce((total, item) => total + item.monthlyCost, 0) *
-  getRegionById(proposal.regionId).costFactor;
-
 export default function Planning() {
   const {
     regionId,
@@ -60,47 +84,73 @@ export default function Planning() {
     proposalsLoading,
     proposalsError,
     activeProposal,
+    setActiveProposalId,
     addProposal,
     removeProposal,
-    setActiveProposalId,
   } = useApp();
   const [form, setForm] = useState<FormState>({ ...emptyForm, regionId });
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState(false);
+  const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [view, setView] = useState<ViewMode>('cards');
 
-  const toggleService = (id: string) => {
-    setForm((prev) => ({
-      ...prev,
-      services: prev.services.includes(id)
-        ? prev.services.filter((item) => item !== id)
-        : [...prev.services, id],
+  const handleAppTypeChange = (appType: AppType) => {
+    const preset = appTypePresets[appType];
+    setForm((previous) => ({
+      ...previous,
+      appType,
+      description: preset.description,
+      services: [...preset.services],
     }));
+    setErrors((previous) => ({ ...previous, services: '' }));
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('¿Deseas eliminar esta propuesta y sus costos?')) return;
-    await removeProposal(id);
+  const toggleService = (serviceId: string) => {
+    setForm((previous) => ({
+      ...previous,
+      services: previous.services.includes(serviceId)
+        ? previous.services.filter((id) => id !== serviceId)
+        : [...previous.services, serviceId],
+    }));
+    setErrors((previous) => ({ ...previous, services: '' }));
   };
 
   const validate = (): boolean => {
     const next: Record<string, string> = {};
-    if (form.name.trim().length < 4) next.name = 'Escribe un nombre de al menos 4 caracteres.';
-    if (!form.description.trim()) next.description = 'Escribe una descripción de la solución.';
+
     const users = Number(form.estimatedUsers);
-    if (!form.estimatedUsers || Number.isNaN(users) || users <= 0)
-      next.estimatedUsers = 'Indica un numero de usuarios mayor que cero.';
-    if (form.services.length === 0) next.services = 'Selecciona al menos un servicio Cloud.';
+
+    if (form.name.trim().length < 4) {
+      next.name = 'Escribe un nombre de al menos 4 caracteres.';
+    }
+    if (form.description.trim().length < 15) {
+      next.description = 'Describe la solucion con al menos 15 caracteres.';
+    }
+    if (!regions.some((region) => region.id === form.regionId)) {
+      next.regionId = 'Selecciona una region valida.';
+    }
+    if (!form.estimatedUsers || !Number.isSafeInteger(users) || users <= 0) {
+      next.estimatedUsers = 'Indica un numero entero de usuarios mayor que cero.';
+    }
+    if (form.services.length === 0) {
+      next.services = 'Selecciona al menos un servicio Cloud.';
+    }
+
     setErrors(next);
     return Object.keys(next).length === 0;
   };
 
-  const handleSubmit = async (event: React.FormEvent) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    setMessage('');
+    setSaved(false);
+
     if (!validate()) return;
 
     setSaving(true);
-    const ok = await addProposal({
+    const success = await addProposal({
       name: form.name.trim(),
       appType: form.appType,
       description: form.description.trim(),
@@ -111,29 +161,44 @@ export default function Planning() {
       goal: form.goal,
     });
     setSaving(false);
-    if (!ok) return;
+
+    if (!success) {
+      setMessage('No se pudo guardar la propuesta. Revisa la notificacion para ver el detalle.');
+      return;
+    }
 
     setForm({ ...emptyForm, regionId });
     setErrors({});
     setSaved(true);
-    window.setTimeout(() => setSaved(false), 3500);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('¿Deseas eliminar esta propuesta?')) return;
+
+    setDeletingId(id);
+    const success = await removeProposal(id);
+    setDeletingId(null);
+
+    if (!success) {
+      setMessage('No se pudo eliminar la propuesta. Revisa la notificacion para ver el detalle.');
+    }
+  };
+
+  const clearForm = () => {
+    setForm({ ...emptyForm, regionId });
+    setErrors({});
+    setMessage('');
+    setSaved(false);
   };
 
   return (
     <div className="space-y-6">
       <SectionCard
         title="Registrar propuesta de solucion Cloud"
-        description="Completa los datos de la solucion que se desea llevar a la nube"
+        description="Define los requisitos y selecciona los servicios. Los precios se calculan en el modulo de Costos."
         icon={ClipboardList}
         action={
-          <button
-            type="button"
-            onClick={() => {
-              setForm({ ...emptyForm, regionId });
-              setErrors({});
-            }}
-            className="btn-ghost py-2"
-          >
+          <button type="button" onClick={clearForm} className="btn-ghost py-2">
             <RotateCcw size={15} /> Limpiar
           </button>
         }
@@ -141,9 +206,7 @@ export default function Planning() {
         <form onSubmit={handleSubmit} noValidate className="space-y-5">
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <label className="label-field" htmlFor="name">
-                Nombre de la solucion
-              </label>
+              <label className="label-field" htmlFor="name">Nombre de la solucion</label>
               <input
                 id="name"
                 className="input-field"
@@ -155,42 +218,21 @@ export default function Planning() {
             </div>
 
             <div>
-              <label className="label-field" htmlFor="appType">
-                Tipo de aplicacion
-              </label>
+              <label className="label-field" htmlFor="appType">Tipo de aplicacion</label>
               <select
                 id="appType"
                 className="input-field"
                 value={form.appType}
-                onChange={(event) => setForm({ ...form, appType: event.target.value as AppType })}
+                onChange={(event) => handleAppTypeChange(event.target.value as AppType)}
               >
                 {appTypes.map((type) => (
-                  <option key={type}>{type}</option>
+                  <option key={type} value={type}>{type}</option>
                 ))}
               </select>
             </div>
-          </div>
 
-          <div>
-            <label className="label-field" htmlFor="description">
-              Descripcion
-            </label>
-            <textarea
-              id="description"
-              rows={3}
-              className="input-field resize-y"
-              value={form.description}
-              onChange={(event) => setForm({ ...form, description: event.target.value })}
-              placeholder="Describe el alcance funcional y tecnico de la solucion"
-            />
-            {errors.description && <p className="mt-1 text-[12px] text-alert">{errors.description}</p>}
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div>
-              <label className="label-field" htmlFor="regionId">
-                Region seleccionada
-              </label>
+              <label className="label-field" htmlFor="regionId">Region</label>
               <select
                 id="regionId"
                 className="input-field"
@@ -198,11 +240,12 @@ export default function Planning() {
                 onChange={(event) => setForm({ ...form, regionId: event.target.value })}
               >
                 {regions.map((region) => (
-                  <option key={region.id} value={region.id}>
-                    {region.name} - {region.location}
-                  </option>
+                  <option key={region.id} value={region.id}>{region.location}</option>
                 ))}
               </select>
+              {errors.regionId && (
+                <p className="mt-1 text-[12px] text-alert">{errors.regionId}</p>
+              )}
             </div>
 
             <div>
@@ -213,6 +256,7 @@ export default function Planning() {
                 id="estimatedUsers"
                 type="number"
                 min={1}
+                step={1}
                 className="input-field"
                 value={form.estimatedUsers}
                 onChange={(event) => setForm({ ...form, estimatedUsers: event.target.value })}
@@ -236,202 +280,234 @@ export default function Planning() {
                 }
               >
                 {availabilities.map((value) => (
-                  <option key={value}>{value}</option>
+                  <option key={value} value={value}>{value}</option>
                 ))}
               </select>
             </div>
 
             <div>
-              <label className="label-field" htmlFor="goal">
-                Objetivo de la migracion
-              </label>
+              <label className="label-field" htmlFor="goal">Objetivo de la migracion</label>
               <select
                 id="goal"
                 className="input-field"
                 value={form.goal}
-                onChange={(event) => setForm({ ...form, goal: event.target.value as MigrationGoal })}
+                onChange={(event) =>
+                  setForm({ ...form, goal: event.target.value as MigrationGoal })
+                }
               >
                 {goals.map((goal) => (
-                  <option key={goal}>{goal}</option>
+                  <option key={goal} value={goal}>{goal}</option>
                 ))}
               </select>
             </div>
           </div>
 
+          <div>
+            <label className="label-field" htmlFor="description">
+              Descripcion de la solucion
+            </label>
+            <textarea
+              id="description"
+              className="input-field min-h-24"
+              value={form.description}
+              onChange={(event) => setForm({ ...form, description: event.target.value })}
+            />
+            {errors.description && (
+              <p className="mt-1 text-[12px] text-alert">{errors.description}</p>
+            )}
+          </div>
+
           <fieldset>
-            <legend className="label-field">Servicios Cloud seleccionados</legend>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {awsServices.map((service) => {
-                const checked = form.services.includes(service.id);
-                return (
-                  <label
-                    key={service.id}
-                    className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-3 text-small transition-colors ${
-                      checked
-                        ? 'border-brand bg-brand/5 text-ink dark:text-night-ink'
-                        : 'border-line text-muted hover:border-brand/50 dark:border-night-line dark:text-night-muted'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-brand"
-                      checked={checked}
-                      onChange={() => toggleService(service.id)}
-                    />
-                    <span className="truncate font-medium">{service.name}</span>
-                  </label>
-                );
-              })}
+            <legend className="label-field">Servicios Cloud</legend>
+            <p className="mb-3 text-small text-muted dark:text-night-muted">
+              El tipo de aplicacion sugiere servicios; puedes seleccionar los que necesites.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {awsServices.map((service) => (
+                <label
+                  key={service.id}
+                  className="flex items-center gap-2 rounded-lg border border-line p-2.5 text-small dark:border-night-line"
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.services.includes(service.id)}
+                    onChange={() => toggleService(service.id)}
+                  />
+                  {service.name}
+                </label>
+              ))}
             </div>
-            {errors.services && <p className="mt-1 text-[12px] text-alert">{errors.services}</p>}
+            {errors.services && (
+              <p className="mt-1 text-[12px] text-alert">{errors.services}</p>
+            )}
           </fieldset>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button type="submit" className="btn-primary" disabled={saving}>
-              <Save size={16} /> {saving ? 'Guardando...' : 'Guardar propuesta'}
-            </button>
-            {saved && <StatusBadge status="ok" label="Propuesta registrada" />}
-          </div>
+          {message && <p role="alert" className="text-small text-alert">{message}</p>}
+          {saved && (
+            <p role="status" className="text-small text-green-600">
+              Propuesta guardada. Ya puedes seleccionarla en el modulo de Costos.
+            </p>
+          )}
+
+          <button type="submit" className="btn-primary" disabled={saving}>
+            {saving ? 'Guardando...' : 'Guardar propuesta'}
+          </button>
         </form>
       </SectionCard>
 
       <SectionCard
         title="Propuestas registradas"
-        description="Informacion consolidada de las soluciones planificadas"
+        description="Servicios y requisitos de las soluciones planificadas"
         icon={Table2}
-        action={<StatusBadge status="info" label={`${proposals.length} registro(s)`} />}
+        action={
+          <div className="flex flex-wrap items-center gap-3">
+            <ViewToggle view={view} onChange={setView} />
+            <StatusBadge status="info" label={`${proposals.length} registro(s)`} />
+          </div>
+        }
       >
         {proposalsError && (
-          <p className="mb-3 text-small text-alert">No se pudieron cargar las propuestas: {proposalsError}</p>
+          <p role="alert" className="mb-4 text-small text-alert">
+            No se pudieron cargar las propuestas: {proposalsError}
+          </p>
         )}
+        {message && <p role="alert" className="mb-4 text-small text-alert">{message}</p>}
 
-        {proposalsLoading && proposals.length === 0 ? (
+        {proposalsLoading ? (
           <p className="py-10 text-center text-small text-muted">Cargando propuestas...</p>
         ) : proposals.length === 0 ? (
           <p className="rounded-lg border border-dashed border-line py-10 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
             No hay propuestas registradas. Completa el formulario para agregar la primera.
           </p>
-        ) : (
-          <>
-            <div className="grid gap-4 xl:grid-cols-2">
-              {proposals.map((proposal) => {
-                const isActive = proposal.id === activeProposal?.id;
-                return (
-                  <article
-                    key={proposal.id}
-                    className={`rounded-card border p-4 ${
-                      isActive ? 'border-brand' : 'border-line dark:border-night-line'
-                    }`}
+        ) : view === 'cards' ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {proposals.map((proposal) => (
+              <article
+                key={proposal.id}
+                className="rounded-card border border-line p-4 dark:border-night-line"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-[16px] font-semibold text-ink dark:text-night-ink">
+                      {proposal.name}
+                    </h3>
+                    <p className="text-[12px] text-muted dark:text-night-muted">
+                      {proposal.appType} · {getRegionById(proposal.regionId).location}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete(proposal.id)}
+                    disabled={deletingId === proposal.id}
+                    className="rounded-lg p-1.5 text-muted transition-colors hover:bg-alert/10 hover:text-alert disabled:opacity-50"
+                    aria-label={`Eliminar ${proposal.name}`}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-[16px] font-semibold text-ink dark:text-night-ink">
-                          {proposal.name}
-                        </h3>
-                        <p className="text-[12px] text-muted dark:text-night-muted">
-                          {proposal.appType} · {getRegionById(proposal.regionId).location}
-                        </p>
-                      </div>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+
+                <p className="mt-2 text-small text-muted dark:text-night-muted">
+                  {proposal.description}
+                </p>
+
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-small">
+                  <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
+                    <dt className="text-[12px] text-muted dark:text-night-muted">
+                      Usuarios estimados
+                    </dt>
+                    <dd className="font-semibold text-ink dark:text-night-ink">
+                      {numberFormat(proposal.estimatedUsers)}
+                    </dd>
+                  </div>
+                  <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
+                    <dt className="text-[12px] text-muted dark:text-night-muted">Disponibilidad</dt>
+                    <dd className="font-semibold text-ink dark:text-night-ink">
+                      {proposal.availability}
+                    </dd>
+                  </div>
+                  <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
+                    <dt className="text-[12px] text-muted dark:text-night-muted">Region</dt>
+                    <dd className="font-semibold text-ink dark:text-night-ink">{proposal.regionId}</dd>
+                  </div>
+                  <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
+                    <dt className="text-[12px] text-muted dark:text-night-muted">Objetivo</dt>
+                    <dd className="font-semibold text-ink dark:text-night-ink">{proposal.goal}</dd>
+                  </div>
+                </dl>
+
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {proposal.services.map((serviceId) => (
+                    <span
+                      key={serviceId}
+                      className="rounded-md border border-line bg-base px-2 py-0.5 text-[11px] text-ink dark:border-night-line dark:bg-night-bg dark:text-night-ink"
+                    >
+                      {getServiceById(serviceId)?.name ?? serviceId}
+                    </span>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-3 dark:border-night-line">
+                  {activeProposal?.id === proposal.id ? (
+                    <StatusBadge status="ok" label="Propuesta activa en Costos" />
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-ghost py-1.5"
+                      onClick={() => setActiveProposalId(proposal.id)}
+                    >
+                      Usar en Costos
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] border-collapse text-small">
+              <thead>
+                <tr className="border-b border-line text-left text-muted dark:border-night-line dark:text-night-muted">
+                  <th className="py-2.5 pr-4 font-medium">Solucion</th>
+                  <th className="py-2.5 pr-4 font-medium">Tipo</th>
+                  <th className="py-2.5 pr-4 font-medium">Region</th>
+                  <th className="py-2.5 pr-4 font-medium">Usuarios</th>
+                  <th className="py-2.5 pr-4 font-medium">Disponibilidad</th>
+                  <th className="py-2.5 pr-4 font-medium">Servicios</th>
+                  <th className="py-2.5 pr-4 font-medium">Objetivo</th>
+                  <th className="py-2.5 font-medium">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proposals.map((proposal) => (
+                  <tr
+                    key={proposal.id}
+                    className="border-b border-line text-ink dark:border-night-line dark:text-night-ink"
+                  >
+                    <td className="py-2.5 pr-4 font-medium">{proposal.name}</td>
+                    <td className="py-2.5 pr-4">{proposal.appType}</td>
+                    <td className="py-2.5 pr-4">
+                      {getRegionById(proposal.regionId).location}
+                    </td>
+                    <td className="py-2.5 pr-4">{numberFormat(proposal.estimatedUsers)}</td>
+                    <td className="py-2.5 pr-4">{proposal.availability}</td>
+                    <td className="py-2.5 pr-4">{proposal.services.length}</td>
+                    <td className="py-2.5 pr-4">{proposal.goal}</td>
+                    <td className="py-2.5">
                       <button
                         type="button"
-                        onClick={() => handleDelete(proposal.id)}
-                        className="rounded-lg p-1.5 text-muted transition-colors hover:bg-alert/10 hover:text-alert"
+                        onClick={() => void handleDelete(proposal.id)}
+                        disabled={deletingId === proposal.id}
+                        className="rounded-lg p-1.5 text-muted hover:text-alert disabled:opacity-50"
                         aria-label={`Eliminar ${proposal.name}`}
                       >
                         <Trash2 size={16} />
                       </button>
-                    </div>
-
-                    <p className="mt-2 text-small text-muted dark:text-night-muted">{proposal.description}</p>
-
-                    <dl className="mt-3 grid grid-cols-2 gap-2 text-small">
-                      <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
-                        <dt className="text-[12px] text-muted dark:text-night-muted">Usuarios estimados</dt>
-                        <dd className="font-semibold text-ink dark:text-night-ink">
-                          {numberFormat(proposal.estimatedUsers)}
-                        </dd>
-                      </div>
-                      <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
-                        <dt className="text-[12px] text-muted dark:text-night-muted">Disponibilidad</dt>
-                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.availability}</dd>
-                      </div>
-                      <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
-                        <dt className="text-[12px] text-muted dark:text-night-muted">Region</dt>
-                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.regionId}</dd>
-                      </div>
-                      <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
-                        <dt className="text-[12px] text-muted dark:text-night-muted">Objetivo</dt>
-                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.goal}</dd>
-                      </div>
-                    </dl>
-
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {proposal.services.map((serviceId) => (
-                        <span
-                          key={serviceId}
-                          className="rounded-md border border-line bg-base px-2 py-0.5 text-[11px] text-ink dark:border-night-line dark:bg-night-bg dark:text-night-ink"
-                        >
-                          {getServiceById(serviceId)?.name ?? serviceId}
-                        </span>
-                      ))}
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-3 dark:border-night-line">
-                      <p className="text-small text-muted dark:text-night-muted">
-                        Costo mensual estimado:{' '}
-                        <span className="font-semibold text-cost">{currency(monthlyOf(proposal))}</span>
-                      </p>
-                      {isActive ? (
-                        <StatusBadge status="ok" label="Propuesta activa" />
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn-ghost py-1.5"
-                          onClick={() => setActiveProposalId(proposal.id)}
-                        >
-                          Usar en Costos
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-
-            <div className="mt-6 overflow-x-auto">
-              <table className="w-full min-w-[720px] border-collapse text-small">
-                <thead>
-                  <tr className="border-b border-line text-left text-muted dark:border-night-line dark:text-night-muted">
-                    <th className="py-2.5 pr-4 font-medium">Solucion</th>
-                    <th className="py-2.5 pr-4 font-medium">Tipo</th>
-                    <th className="py-2.5 pr-4 font-medium">Region</th>
-                    <th className="py-2.5 pr-4 font-medium">Usuarios</th>
-                    <th className="py-2.5 pr-4 font-medium">Disponibilidad</th>
-                    <th className="py-2.5 pr-4 font-medium">Servicios</th>
-                    <th className="py-2.5 pr-4 font-medium">Costo mensual</th>
-                    <th className="py-2.5 font-medium">Objetivo</th>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {proposals.map((proposal) => (
-                    <tr
-                      key={proposal.id}
-                      className="border-b border-line text-ink dark:border-night-line dark:text-night-ink"
-                    >
-                      <td className="py-2.5 pr-4 font-medium">{proposal.name}</td>
-                      <td className="py-2.5 pr-4">{proposal.appType}</td>
-                      <td className="py-2.5 pr-4">{proposal.regionId}</td>
-                      <td className="py-2.5 pr-4">{numberFormat(proposal.estimatedUsers)}</td>
-                      <td className="py-2.5 pr-4">{proposal.availability}</td>
-                      <td className="py-2.5 pr-4">{proposal.services.length}</td>
-                      <td className="py-2.5 pr-4">{currency(monthlyOf(proposal))}</td>
-                      <td className="py-2.5">{proposal.goal}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </SectionCard>
     </div>

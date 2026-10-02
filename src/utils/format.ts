@@ -8,6 +8,14 @@ export const currency = (value: number): string =>
     maximumFractionDigits: 2,
   }).format(Number.isFinite(value) ? value : 0);
 
+export const dollarCurrency = (value: number): string =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(value) ? value : 0);
+
 export const compactCurrency = (value: number): string =>
   new Intl.NumberFormat('es-PE', {
     style: 'currency',

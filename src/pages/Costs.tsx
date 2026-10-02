@@ -1,13 +1,14 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { Calculator, ClipboardList, Download, PieChart, RotateCcw, Wallet } from 'lucide-react';
+import { Calculator, ClipboardList, Download, PieChart, RotateCcw, Trash2, Wallet } from 'lucide-react';
 import SectionCard from '../components/SectionCard';
 import CostCard from '../components/CostCard';
 import StatCard from '../components/StatCard';
+import ViewToggle, { type ViewMode } from '../components/ViewToggle';
 import DonutChart from '../components/DonutChart';
 import BarChart from '../components/BarChart';
 import { useApp } from '../context/AppContext';
 import { awsServices, getServiceById } from '../data/awsServices';
-import { chartPalette, currency, numberFormat, today } from '../utils/format';
+import { chartPalette, currency, dollarCurrency, numberFormat, today } from '../utils/format';
 import { downloadCsv } from '../utils/report';
 import type { ChartDatum, CloudProposal } from '../types/cloud';
 
@@ -81,6 +82,7 @@ function CostsContent({ proposal }: { proposal: CloudProposal }) {
   const [quantity, setQuantity] = useState(() => String(initialItem?.quantity ?? 1));
   const [hours, setHours] = useState(() => String(initialItem?.hours ?? 730));
   const [error, setError] = useState('');
+  const [view, setView] = useState<ViewMode>('cards');
   const selectedService = getServiceById(serviceId);
   const existingItem = costItems.find((item) => item.serviceId === serviceId);
   const qty = Number(quantity);
@@ -344,6 +346,8 @@ function CostsContent({ proposal }: { proposal: CloudProposal }) {
               data={distribution}
               centerLabel="Total mensual"
               centerValue={currency(monthlyCost)}
+              valueLabel="Mensual"
+              tooltipFormat={dollarCurrency}
             />
           )}
         </SectionCard>
@@ -366,13 +370,16 @@ function CostsContent({ proposal }: { proposal: CloudProposal }) {
         title="Detalle de la estimacion"
         description="Cada linea aplica el factor de costo de la region activa"
         icon={Wallet}
+        action={<ViewToggle view={view} onChange={setView} />}
       >
         {costItems.length === 0 ? (
           <p className="rounded-lg border border-dashed border-line py-10 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
             La estimacion esta vacia. Agrega servicios desde la calculadora o pulsa Restaurar.
           </p>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
+
+        ) : view === 'cards' ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+
             {pricedItems.map((item) => (
               <CostCard
                 key={item.id}
@@ -381,6 +388,48 @@ function CostsContent({ proposal }: { proposal: CloudProposal }) {
                 onRemove={removeCostItem}
               />
             ))}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] border-collapse text-small">
+              <thead>
+                <tr className="border-b border-line text-left text-muted dark:border-night-line dark:text-night-muted">
+                  <th className="py-2.5 pr-4 font-medium">Servicio</th>
+                  <th className="py-2.5 pr-4 font-medium">Cantidad</th>
+                  <th className="py-2.5 pr-4 font-medium">Horas</th>
+                  <th className="py-2.5 pr-4 font-medium">Precio base</th>
+                  <th className="py-2.5 pr-4 font-medium">Costo mensual</th>
+                  <th className="py-2.5 pr-4 font-medium">Costo anual</th>
+                  <th className="py-2.5 pr-4 font-medium">Participacion</th>
+                  <th className="py-2.5 font-medium">Accion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pricedItems.map((item) => (
+                  <tr key={item.id} className="border-b border-line text-ink dark:border-night-line dark:text-night-ink">
+                    <td className="py-2.5 pr-4 font-medium">{item.serviceName}</td>
+                    <td className="py-2.5 pr-4">{numberFormat(item.quantity)}</td>
+                    <td className="py-2.5 pr-4">{numberFormat(item.hours)}</td>
+                    <td className="py-2.5 pr-4">{currency(item.hourlyPrice)} / h</td>
+                    <td className="py-2.5 pr-4 font-semibold text-cost">{currency(item.monthlyCost)}</td>
+                    <td className="py-2.5 pr-4">{currency(item.annualCost)}</td>
+                    <td className="py-2.5 pr-4">
+                      {monthlyCost === 0 ? '0.0' : ((item.monthlyCost / monthlyCost) * 100).toFixed(1)}%
+                    </td>
+                    <td className="py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => removeCostItem(item.id)}
+                        className="rounded-lg p-1.5 text-muted transition-colors hover:bg-alert/10 hover:text-alert"
+                        aria-label={`Quitar ${item.serviceName} de la estimacion`}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </SectionCard>
