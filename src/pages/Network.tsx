@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { ArrowDown, Network as NetworkIcon, ShieldCheck, Route } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { ArrowDown, ClipboardList, Network as NetworkIcon, ShieldCheck, Route } from 'lucide-react';
 import SectionCard from '../components/SectionCard';
 import StatusBadge from '../components/StatusBadge';
 import { networkNodes } from '../data/security';
+import { getServiceById } from '../data/awsServices';
 import { useApp } from '../context/AppContext';
 import type { NetworkNode } from '../types/cloud';
 
@@ -13,6 +14,17 @@ const flowStyles: Record<NetworkNode['layer'], string> = {
   vpc: 'border-brand/40 bg-brand/5',
   'subnet-public': 'border-security/40 bg-security/5',
   'subnet-private': 'border-alert/30 bg-alert/5',
+  storage: 'border-cost/40 bg-cost/5',
+};
+
+/** Solo los servicios que tienen un lugar claro dentro del flujo de trafico */
+const SERVICE_TO_NODE: Record<string, string> = {
+  route53: 'route53',
+  cloudfront: 'cloudfront',
+  vpc: 'vpc',
+  ec2: 'ec2',
+  rds: 'rds',
+  s3: 's3',
 };
 
 function NodeBox({
@@ -51,10 +63,32 @@ function NodeBox({
 }
 
 export default function Network() {
-  const { region } = useApp();
+  const { region, activeProposal } = useApp();
   const [selected, setSelected] = useState<NetworkNode>(networkNodes[0]);
 
   const byId = (id: string) => networkNodes.find((node) => node.id === id)!;
+
+  // Servicios de la propuesta activa que SÍ son parte del flujo de trafico, en el orden del flujo
+  const proposalFlow = useMemo(() => {
+    if (!activeProposal) return [];
+    const order = ['route53', 'cloudfront', 'vpc', 'ec2', 'rds', 's3'];
+    return order
+      .filter((serviceId) => activeProposal.services.includes(serviceId))
+      .map((serviceId) => byId(SERVICE_TO_NODE[serviceId]));
+  }, [activeProposal]);
+
+  // Lo que el usuario eligio pero no encaja en el flujo (ej. IAM): servicios de soporte
+  const supportServices = useMemo(() => {
+    if (!activeProposal) return [];
+    return activeProposal.services
+      .filter((serviceId) => !SERVICE_TO_NODE[serviceId])
+      .map((serviceId) => getServiceById(serviceId))
+      .filter((service): service is NonNullable<typeof service> => Boolean(service));
+  }, [activeProposal]);
+
+  const computeNodes = proposalFlow.filter((node) => node.id === 'ec2' || node.id === 'rds' || node.id === 's3');
+  const edgeNodes = proposalFlow.filter((node) => node.id === 'route53' || node.id === 'cloudfront');
+  const hasVpc = proposalFlow.some((node) => node.id === 'vpc');
 
   return (
     <div className="space-y-6">
@@ -182,6 +216,95 @@ export default function Network() {
             </li>
           ))}
         </ol>
+      </SectionCard>
+
+      {/* ============================================================
+          ARQUITECTURA DE LA PROPUESTA ACTIVA (dinamica)
+          ============================================================ */}
+      <SectionCard
+        title={activeProposal ? `Arquitectura de: ${activeProposal.name}` : 'Tu arquitectura'}
+        description="Solo los servicios que elegiste en Planificación, en el mismo flujo de trafico"
+        icon={ClipboardList}
+        action={
+          activeProposal ? (
+            <StatusBadge status="info" label={`${activeProposal.services.length} servicio(s)`} />
+          ) : undefined
+        }
+      >
+        {!activeProposal ? (
+          <p className="rounded-card border border-dashed border-line p-8 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
+            Aun no hay una propuesta activa. Crea una en{' '}
+            <span className="font-semibold text-ink dark:text-night-ink">Planificación Cloud</span> para ver aqui su
+            arquitectura.
+          </p>
+        ) : proposalFlow.length === 0 ? (
+          <p className="rounded-card border border-dashed border-line p-8 text-center text-small text-muted dark:border-night-line dark:text-night-muted">
+            Esta propuesta no seleccionó servicios que formen parte del flujo de red (Route 53, CloudFront, VPC, EC2,
+            RDS o S3).
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <NodeBox node={byId('internet')} onSelect={setSelected} selected={selected.id === 'internet'} />
+
+            {edgeNodes.map((node) => (
+              <div key={node.id} className="space-y-3">
+                <div className="flex justify-center">
+                  <ArrowDown size={18} className="text-brand" />
+                </div>
+                <NodeBox node={node} onSelect={setSelected} selected={selected.id === node.id} />
+              </div>
+            ))}
+
+            {hasVpc && (
+              <>
+                <div className="flex justify-center">
+                  <ArrowDown size={18} className="text-brand" />
+                </div>
+                <div className="rounded-card border-2 border-dashed border-brand/50 p-4">
+                  <p className="mb-3 text-small font-semibold text-brand">VPC 10.0.0.0/16</p>
+                  {computeNodes.length === 0 ? (
+                    <p className="text-[12px] text-muted dark:text-night-muted">
+                      Sin computo ni almacenamiento seleccionado dentro de la VPC todavia.
+                    </p>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {computeNodes.map((node) => (
+                        <NodeBox key={node.id} node={node} onSelect={setSelected} selected={selected.id === node.id} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {!hasVpc && computeNodes.length > 0 && (
+              <div className="grid gap-3 md:grid-cols-2">
+                {computeNodes.map((node) => (
+                  <NodeBox key={node.id} node={node} onSelect={setSelected} selected={selected.id === node.id} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeProposal && supportServices.length > 0 && (
+          <div className="mt-5 border-t border-line pt-4 dark:border-night-line">
+            <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted dark:text-night-muted">
+              Servicios de soporte (fuera del flujo de trafico)
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {supportServices.map((service) => (
+                <span
+                  key={service.id}
+                  className="rounded-md border border-line bg-base px-2.5 py-1 text-[12px] text-ink dark:border-night-line dark:bg-night-bg dark:text-night-ink"
+                  title={service.description}
+                >
+                  {service.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </SectionCard>
     </div>
   );
