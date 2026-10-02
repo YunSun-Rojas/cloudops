@@ -61,6 +61,13 @@ function bound(camera: Camera): Camera {
   return { zoom, x: Math.max(halfW, Math.min(WIDTH - halfW, camera.x)),
     y: Math.max(halfH, Math.min(HEIGHT - halfH, camera.y)) };
 }
+// Nivel de acercamiento al hacer clic en un marcador del mapa.
+const FOCUS_ZOOM = 4;
+// Convencion AWS: el identificador de cada zona de disponibilidad es la region + una letra.
+function zoneCodes(region: Region): string[] {
+  return Array.from({ length: region.availabilityZones }, (_, index) =>
+    `${region.id}${String.fromCharCode(97 + index)}`);
+}
 
 export default function Infrastructure() {
   const { regionId, setRegionId, pushNotification } = useApp();
@@ -104,6 +111,12 @@ export default function Infrastructure() {
     setContinent('Todos');
     setQuery('');
     setCamera(bound({ ...point, zoom: 3 }));
+  };
+  // Acerca el mapa a la region elegida al hacer clic en su marcador.
+  const focusRegion = (region: Region) => {
+    const point = locate(region);
+    if (!point) return;
+    setCamera(bound({ ...point, zoom: FOCUS_ZOOM }));
   };
   const changeZoom = (multiplier: number) => setCamera((current) => bound({ ...current, zoom: current.zoom * multiplier }));
   // Convert screen movement to SVG units, including letterboxing on mobile.
@@ -187,14 +200,23 @@ export default function Infrastructure() {
                   className="group cursor-pointer outline-none"
                   onMouseEnter={() => { if (!drag.current) setHoveredId(region.id); }} onMouseLeave={() => setHoveredId(null)}
                   onFocus={() => setHoveredId(region.id)} onBlur={() => setHoveredId(null)}
-                  onClick={() => { if (!suppressClick.current) handleSelect(region.id); }}
-                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(region.id); } }}>
+                  onClick={() => { if (!suppressClick.current) { handleSelect(region.id); focusRegion(region); } }}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(region.id); focusRegion(region); } }}>
                   <title>{region.name} · {region.location} · {region.statusLabel}</title>
                   <circle r="16" fill="transparent" />
                   {active && <circle r="14" fill={color} opacity="0.18" />}
                   <circle r="17" fill="none" stroke="#38bdf8" strokeWidth="2" className="opacity-0 group-focus-visible:opacity-100" />
                   <circle r={active ? 7 : 5} fill={color} stroke="white" strokeWidth="2" />
-                  {highlighted && <g pointerEvents="none">
+                  {active && zoom >= 3 && zoneCodes(region).map((code, index, list) => {
+                    const angle = (index / list.length) * Math.PI * 2 - Math.PI / 2;
+                    const zx = Math.cos(angle) * 30;
+                    const zy = Math.sin(angle) * 30;
+                    return <g key={code} transform={`translate(${zx} ${zy})`} pointerEvents="none">
+                      <circle r="3.5" fill="#0ea5e9" stroke="white" strokeWidth="1.2" />
+                      <text x="0" y="-7" textAnchor="middle" fontSize="8" fontWeight="600" className="fill-slate-700 dark:fill-slate-200">{code}</text>
+                    </g>;
+                  })}
+                  {highlighted && !(active && zoom >= 3) && <g pointerEvents="none">
                     <rect x={point.x > 820 ? -148 : 12} y="-30" width="136" height="23" rx="5" fill="#0f172a" />
                     <text x={point.x > 820 ? -140 : 20} y="-15" fill="white" fontSize="10" fontWeight="600">{region.id.length > 20 ? `${region.id.slice(0, 19)}…` : region.id}</text>
                   </g>}

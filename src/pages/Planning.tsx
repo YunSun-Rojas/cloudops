@@ -3,6 +3,7 @@
   import { ClipboardList, Table2, Trash2, Save, RotateCcw } from 'lucide-react';
   import SectionCard from '../components/SectionCard';
   import StatusBadge from '../components/StatusBadge';
+  import ViewToggle, { type ViewMode } from '../components/ViewToggle';
   import { useApp } from '../context/AppContext';
   import { regions, getRegionById } from '../data/regions';
   import { awsServices, getServiceById } from '../data/awsServices';
@@ -28,6 +29,38 @@
     'Modernizacion de la aplicacion',
     'Mejora de seguridad',
   ];
+
+  /**
+   * Presets por tipo de aplicacion: al elegir un tipo se autocompleta la
+   * descripcion y se autoseleccionan los servicios Cloud recomendados.
+   */
+  const appTypePresets: Record<AppType, { description: string; services: string[] }> = {
+    'Aplicacion web': {
+      description:
+        'Aplicacion web de tres capas desplegada en AWS: instancias EC2 detras de CloudFront, base de datos RDS Multi-AZ y almacenamiento de archivos en S3, aislada en una VPC con subredes publicas y privadas.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront'],
+    },
+    'API / Microservicios': {
+      description:
+        'API REST y microservicios sobre EC2 con escalado automatico, base de datos RDS, identidades y permisos gestionados con IAM y monitoreo centralizado en CloudWatch dentro de una VPC dedicada.',
+      services: ['ec2', 'rds', 'iam', 'vpc', 'route53', 'cloudwatch'],
+    },
+    'Aplicacion movil': {
+      description:
+        'Backend para aplicacion movil con endpoints en EC2, autenticacion y permisos con IAM, persistencia en RDS, almacenamiento de imagenes en S3 y distribucion de contenido por CloudFront.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront', 'cloudwatch'],
+    },
+    'Analitica de datos': {
+      description:
+        'Plataforma de analitica de datos con data lake en S3, procesamiento sobre EC2, base de datos RDS para los resultados y tableros monitoreados con CloudWatch en una VPC segura.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'cloudwatch'],
+    },
+    'Comercio electronico': {
+      description:
+        'Tienda en linea de alta disponibilidad con servidores EC2 escalables, catalogo y contenido en S3, datos transaccionales en RDS Multi-AZ, entrega por CloudFront y seguridad con IAM.',
+      services: ['ec2', 's3', 'rds', 'iam', 'vpc', 'route53', 'cloudfront', 'cloudwatch'],
+    },
+  };
 
   interface FormState {
     name: string;
@@ -77,6 +110,7 @@
     const [form, setForm] = useState<FormState>({ ...emptyForm, regionId });
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [saved, setSaved] = useState(false);
+    const [view, setView] = useState<ViewMode>('cards');
 
     const loadProposals = async () => { setLoading(true);
 
@@ -97,6 +131,17 @@
     useEffect(() => {
       loadProposals();
     }, []);
+
+    const handleAppTypeChange = (value: AppType) => {
+      const preset = appTypePresets[value];
+      setForm((prev) => ({
+        ...prev,
+        appType: value,
+        description: preset.description,
+        services: preset.services,
+      }));
+    };
+
     const toggleService = (id: string) => {
       setForm((prev) => ({
         ...prev,
@@ -234,7 +279,7 @@
                   id="appType"
                   className="input-field"
                   value={form.appType}
-                  onChange={(event) => setForm({ ...form, appType: event.target.value as AppType })}
+                  onChange={(event) => handleAppTypeChange(event.target.value as AppType)}
                 >
                   {appTypes.map((type) => (
                     <option key={type}>{type}</option>
@@ -371,7 +416,12 @@
           title="Propuestas registradas"
           description="Informacion consolidada de las soluciones planificadas"
           icon={Table2}
-          action={<StatusBadge status="info" label={`${proposals.length} registro(s)`} />}
+          action={
+            <div className="flex flex-wrap items-center gap-3">
+              <ViewToggle view={view} onChange={setView} />
+              <StatusBadge status="info" label={`${proposals.length} registro(s)`} />
+            </div>
+          }
         >
 
           {loading ? (
@@ -384,6 +434,7 @@
             </p>
           ) : (
             <>
+              {view === 'cards' ? (
               <div className="grid gap-4 xl:grid-cols-2">
                 {proposals.map((proposal) => (
                   <article key={proposal.id} className="rounded-card border border-line p-4 dark:border-night-line">
@@ -442,8 +493,8 @@
                   </article>
                 ))}
               </div>
-
-              <div className="mt-6 overflow-x-auto">
+              ) : (
+              <div className="overflow-x-auto">
                 <table className="w-full min-w-[720px] border-collapse text-small">
                   <thead>
                     <tr className="border-b border-line text-left text-muted dark:border-night-line dark:text-night-muted">
@@ -474,6 +525,7 @@
                   </tbody>
                 </table>
               </div>
+              )}
             </>
           )}
         </SectionCard>

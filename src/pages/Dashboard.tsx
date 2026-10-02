@@ -28,7 +28,7 @@ import StatusBadge from '../components/StatusBadge';
 import { useApp } from '../context/AppContext';
 import { awsServices, getServiceById } from '../data/awsServices';
 import { securityControls } from '../data/security';
-import { chartPalette, currency, numberFormat, today } from '../utils/format';
+import { chartPalette, currency, dollarCurrency, numberFormat, today } from '../utils/format';
 import { downloadCsv } from '../utils/report';
 import type { ChartDatum, Status } from '../types/cloud';
 
@@ -306,6 +306,8 @@ export default function Dashboard() {
             data={costByService}
             centerLabel="Gasto mensual"
             centerValue={currency(monthlyCost)}
+            valueLabel="Mensual"
+            tooltipFormat={dollarCurrency}
           />
         </SectionCard>
       </div>
