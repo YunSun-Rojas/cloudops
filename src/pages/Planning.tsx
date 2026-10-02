@@ -158,118 +158,78 @@
 
     if (!confirmar) return;
 
-    const { error } = await supabase
-      .from('propuestas_cloud')
-      .delete()
-      .eq('id', id);
 
-    if (error) {
-      console.error('Error eliminando propuesta:', error);
-      alert('No se pudo eliminar la propuesta.');
-      return;
-    }
-
-    await loadProposals();
+  const validate = (): boolean => {
+    const next: Record<string, string> = {};
+    if (form.name.trim().length < 4) next.name = 'Escribe un nombre de al menos 4 caracteres.';
+    if (form.description.trim().length < 15)
+      next.description = 'Describe la solucion con al menos 15 caracteres.';
+    const users = Number(form.estimatedUsers);
+    if (!form.estimatedUsers || Number.isNaN(users) || users <= 0)
+      next.estimatedUsers = 'Indica un numero de usuarios mayor que cero.';
+    if (form.services.length === 0) next.services = 'Selecciona al menos un servicio Cloud.';
+    setErrors(next);
+    return Object.keys(next).length === 0;
   };
-    const validate = (): boolean => {
-      const next: Record<string, string> = {};
-      if (form.name.trim().length < 4) next.name = 'Escribe un nombre de al menos 4 caracteres.';
-      if (form.description.trim().length < 15)
-        next.description = 'Describe la solucion con al menos 15 caracteres.';
-      const users = Number(form.estimatedUsers);
-      if (!form.estimatedUsers || Number.isNaN(users) || users <= 0)
-        next.estimatedUsers = 'Indica un numero de usuarios mayor que cero.';
-      if (form.services.length === 0) next.services = 'Selecciona al menos un servicio Cloud.';
-      setErrors(next);
-      return Object.keys(next).length === 0;
-    };
 
-    const handleSubmit = async (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-
     if (!validate()) return;
 
-    const { error } = await supabase
-      .from('propuestas_cloud')
-      .insert({
-        nombre: form.name.trim(),
-
-        descripcion: form.description.trim(),
-
-        region: form.regionId,
-
-        tipo_aplicacion: form.appType,
-
-        usuarios_estimados: Number(form.estimatedUsers),
-
-        disponibilidad: form.availability,
-
-        objetivo: form.goal,
-
-        estado: 'planificado',
-
-        costo_estimado: 0,
-
-        configuracion: {
-          servicios: form.services,
-        },
-      });
-
-    if (error) {
-      console.error('Error guardando propuesta:', error);
-      alert('No se pudo guardar la propuesta.');
-      return;
-    }
-
-    await loadProposals();
-
-    setForm({
-      ...emptyForm,
-      regionId,
+    setSaving(true);
+    const ok = await addProposal({
+      name: form.name.trim(),
+      appType: form.appType,
+      description: form.description.trim(),
+      regionId: form.regionId,
+      estimatedUsers: Number(form.estimatedUsers),
+      availability: form.availability,
+      services: form.services,
+      goal: form.goal,
     });
+    setSaving(false);
+    if (!ok) return;
 
+    setForm({ ...emptyForm, regionId });
     setErrors({});
     setSaved(true);
-
-    window.setTimeout(() => {
-      setSaved(false);
-    }, 3500);
+    window.setTimeout(() => setSaved(false), 3500);
   };
 
-    return (
-      <div className="space-y-6">
-        <SectionCard
-          title="Registrar propuesta de solucion Cloud"
-          description="Completa los datos de la solucion que se desea llevar a la nube"
-          icon={ClipboardList}
-          action={
-            <button
-              type="button"
-              onClick={() => {
-                setForm({ ...emptyForm, regionId });
-                setErrors({});
-              }}
-              className="btn-ghost py-2"
-            >
-              <RotateCcw size={15} /> Limpiar
-            </button>
-          }
-        >
-          <form onSubmit={handleSubmit} noValidate className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="label-field" htmlFor="name">
-                  Nombre de la solucion
-                </label>
-                <input
-                  id="name"
-                  className="input-field"
-                  value={form.name}
-                  onChange={(event) => setForm({ ...form, name: event.target.value })}
-                  placeholder="Plataforma de facturacion electronica"
-                />
-                {errors.name && <p className="mt-1 text-[12px] text-alert">{errors.name}</p>}
-              </div>
+  return (
+    <div className="space-y-6">
+      <SectionCard
+        title="Registrar propuesta de solucion Cloud"
+        description="Completa los datos de la solucion que se desea llevar a la nube"
+        icon={ClipboardList}
+        action={
+          <button
+            type="button"
+            onClick={() => {
+              setForm({ ...emptyForm, regionId });
+              setErrors({});
+            }}
+            className="btn-ghost py-2"
+          >
+            <RotateCcw size={15} /> Limpiar
+          </button>
+        }
+      >
+        <form onSubmit={handleSubmit} noValidate className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <label className="label-field" htmlFor="name">
+                Nombre de la solucion
+              </label>
+              <input
+                id="name"
+                className="input-field"
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                placeholder="Plataforma de facturacion electronica"
+              />
+              {errors.name && <p className="mt-1 text-[12px] text-alert">{errors.name}</p>}
+            </div>
 
               <div>
                 <label className="label-field" htmlFor="appType">
@@ -286,129 +246,61 @@
                   ))}
                 </select>
               </div>
+
             </div>
 
             <div>
-              <label className="label-field" htmlFor="description">
-                Descripcion
+              <label className="label-field" htmlFor="estimatedUsers">
+                Numero estimado de usuarios
               </label>
-              <textarea
-                id="description"
-                rows={3}
-                className="input-field resize-y"
-                value={form.description}
-                onChange={(event) => setForm({ ...form, description: event.target.value })}
-                placeholder="Describe el alcance funcional y tecnico de la solucion"
+              <input
+                id="estimatedUsers"
+                type="number"
+                min={1}
+                className="input-field"
+                value={form.estimatedUsers}
+                onChange={(event) => setForm({ ...form, estimatedUsers: event.target.value })}
+                placeholder="1500"
               />
-              {errors.description && <p className="mt-1 text-[12px] text-alert">{errors.description}</p>}
+              {errors.estimatedUsers && (
+                <p className="mt-1 text-[12px] text-alert">{errors.estimatedUsers}</p>
+              )}
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <div>
-                <label className="label-field" htmlFor="regionId">
-                  Region seleccionada
-                </label>
-                <select
-                  id="regionId"
-                  className="input-field"
-                  value={form.regionId}
-                  onChange={(event) => setForm({ ...form, regionId: event.target.value })}
-                >
-                  {regions.map((region) => (
-                    <option key={region.id} value={region.id}>
-                      {region.name} - {region.location}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="label-field" htmlFor="estimatedUsers">
-                  Numero estimado de usuarios
-                </label>
-                <input
-                  id="estimatedUsers"
-                  type="number"
-                  min={1}
-                  className="input-field"
-                  value={form.estimatedUsers}
-                  onChange={(event) => setForm({ ...form, estimatedUsers: event.target.value })}
-                  placeholder="1500"
-                />
-                {errors.estimatedUsers && (
-                  <p className="mt-1 text-[12px] text-alert">{errors.estimatedUsers}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="label-field" htmlFor="availability">
-                  Nivel de disponibilidad requerido
-                </label>
-                <select
-                  id="availability"
-                  className="input-field"
-                  value={form.availability}
-                  onChange={(event) =>
-                    setForm({ ...form, availability: event.target.value as Availability })
-                  }
-                >
-                  {availabilities.map((value) => (
-                    <option key={value}>{value}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="label-field" htmlFor="goal">
-                  Objetivo de la migracion
-                </label>
-                <select
-                  id="goal"
-                  className="input-field"
-                  value={form.goal}
-                  onChange={(event) => setForm({ ...form, goal: event.target.value as MigrationGoal })}
-                >
-                  {goals.map((goal) => (
-                    <option key={goal}>{goal}</option>
-                  ))}
-                </select>
-              </div>
+            <div>
+              <label className="label-field" htmlFor="availability">
+                Nivel de disponibilidad requerido
+              </label>
+              <select
+                id="availability"
+                className="input-field"
+                value={form.availability}
+                onChange={(event) =>
+                  setForm({ ...form, availability: event.target.value as Availability })
+                }
+              >
+                {availabilities.map((value) => (
+                  <option key={value}>{value}</option>
+                ))}
+              </select>
             </div>
 
-            <fieldset>
-              <legend className="label-field">Servicios Cloud seleccionados</legend>
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                {awsServices.map((service) => {
-                  const checked = form.services.includes(service.id);
-                  return (
-                    <label
-                      key={service.id}
-                      className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-3 text-small transition-colors ${
-                        checked
-                          ? 'border-brand bg-brand/5 text-ink dark:text-night-ink'
-                          : 'border-line text-muted hover:border-brand/50 dark:border-night-line dark:text-night-muted'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4 accent-brand"
-                        checked={checked}
-                        onChange={() => toggleService(service.id)}
-                      />
-                      <span className="truncate font-medium">{service.name}</span>
-                    </label>
-                  );
-                })}
-              </div>
-              {errors.services && <p className="mt-1 text-[12px] text-alert">{errors.services}</p>}
-            </fieldset>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <button type="submit" className="btn-primary">
-                <Save size={16} /> Guardar propuesta
-              </button>
-              {saved && <StatusBadge status="ok" label="Propuesta registrada" />}
+            <div>
+              <label className="label-field" htmlFor="goal">
+                Objetivo de la migracion
+              </label>
+              <select
+                id="goal"
+                className="input-field"
+                value={form.goal}
+                onChange={(event) => setForm({ ...form, goal: event.target.value as MigrationGoal })}
+              >
+                {goals.map((goal) => (
+                  <option key={goal}>{goal}</option>
+                ))}
+              </select>
             </div>
+
           </form>
         </SectionCard>
 
@@ -438,50 +330,51 @@
               <div className="grid gap-4 xl:grid-cols-2">
                 {proposals.map((proposal) => (
                   <article key={proposal.id} className="rounded-card border border-line p-4 dark:border-night-line">
+
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-[16px] font-semibold text-ink dark:text-night-ink">
-                          {proposal.nombre}
+                          {proposal.name}
                         </h3>
                         <p className="text-[12px] text-muted dark:text-night-muted">
-                          {proposal.tipo_aplicacion} · {getRegionById(proposal.region).location}
+                          {proposal.appType} · {getRegionById(proposal.regionId).location}
                         </p>
                       </div>
                       <button
                         type="button"
                         onClick={() => handleDelete(proposal.id)}
                         className="rounded-lg p-1.5 text-muted transition-colors hover:bg-alert/10 hover:text-alert"
-                        aria-label={`Eliminar ${proposal.nombre}`}
+                        aria-label={`Eliminar ${proposal.name}`}
                       >
                         <Trash2 size={16} />
                       </button>
                     </div>
 
-                    <p className="mt-2 text-small text-muted dark:text-night-muted">{proposal.descripcion}</p>
+                    <p className="mt-2 text-small text-muted dark:text-night-muted">{proposal.description}</p>
 
                     <dl className="mt-3 grid grid-cols-2 gap-2 text-small">
                       <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
                         <dt className="text-[12px] text-muted dark:text-night-muted">Usuarios estimados</dt>
                         <dd className="font-semibold text-ink dark:text-night-ink">
-                          {numberFormat(proposal.usuarios_estimados)}
+                          {numberFormat(proposal.estimatedUsers)}
                         </dd>
                       </div>
                       <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
                         <dt className="text-[12px] text-muted dark:text-night-muted">Disponibilidad</dt>
-                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.disponibilidad}</dd>
+                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.availability}</dd>
                       </div>
                       <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
                         <dt className="text-[12px] text-muted dark:text-night-muted">Region</dt>
-                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.region}</dd>
+                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.regionId}</dd>
                       </div>
                       <div className="rounded-lg bg-base p-2.5 dark:bg-night-bg">
                         <dt className="text-[12px] text-muted dark:text-night-muted">Objetivo</dt>
-                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.objetivo}</dd>
+                        <dd className="font-semibold text-ink dark:text-night-ink">{proposal.goal}</dd>
                       </div>
                     </dl>
 
                     <div className="mt-3 flex flex-wrap gap-1.5">
-                      {proposal.configuracion?.servicios?.map((serviceId) => (
+                      {proposal.services.map((serviceId) => (
                         <span
                           key={serviceId}
                           className="rounded-md border border-line bg-base px-2 py-0.5 text-[11px] text-ink dark:border-night-line dark:bg-night-bg dark:text-night-ink"
@@ -490,7 +383,26 @@
                         </span>
                       ))}
                     </div>
+
+                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-line pt-3 dark:border-night-line">
+                      <p className="text-small text-muted dark:text-night-muted">
+                        Costo mensual estimado:{' '}
+                        <span className="font-semibold text-cost">{currency(monthlyOf(proposal))}</span>
+                      </p>
+                      {isActive ? (
+                        <StatusBadge status="ok" label="Propuesta activa" />
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-ghost py-1.5"
+                          onClick={() => setActiveProposalId(proposal.id)}
+                        >
+                          Usar en Costos
+                        </button>
+                      )}
+                    </div>
                   </article>
+
                 ))}
               </div>
               ) : (
@@ -532,3 +444,4 @@
       </div>
     );
   }
+

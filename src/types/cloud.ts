@@ -73,6 +73,7 @@ export interface CloudProposal {
   availability: Availability;
   services: string[];
   goal: MigrationGoal;
+  costItems: CostItem[];
   createdAt: string;
 }
 
