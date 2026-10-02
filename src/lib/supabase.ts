@@ -1,15 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const runtimeEnv = (typeof import.meta !== 'undefined' && import.meta.env) ||
+  ((globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {});
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error(
-    'Faltan las variables de entorno de Supabase'
-  );
-}
+const supabaseUrl = runtimeEnv.VITE_SUPABASE_URL?.trim();
+const supabaseKey = runtimeEnv.VITE_SUPABASE_ANON_KEY?.trim();
+
+export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseKey);
 
 export const supabase = createClient(
-  supabaseUrl,
-  supabaseKey
+  supabaseUrl || 'https://example.supabase.co',
+  supabaseKey || 'public-anon-key',
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  },
 );
