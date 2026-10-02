@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { Calculator, Download, PieChart, RotateCcw, Trash2, Wallet } from 'lucide-react';
+import { Calculator, ClipboardList, Download, PieChart, RotateCcw, Trash2, Wallet } from 'lucide-react';
 import SectionCard from '../components/SectionCard';
 import CostCard from '../components/CostCard';
 import StatCard from '../components/StatCard';

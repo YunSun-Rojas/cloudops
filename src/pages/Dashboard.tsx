@@ -33,7 +33,14 @@ import { useApp } from '../context/AppContext';
 import { awsServices, getServiceById } from '../data/awsServices';
 import { regions } from '../data/regions';
 import { securityControls } from '../data/security';
-import { chartPalette, currency, dollarCurrency, numberFormat, today } from '../utils/format';
+import {
+  chartPalette,
+  compactCurrency,
+  currency,
+  dollarCurrency,
+  numberFormat,
+  today,
+} from '../utils/format';
 import { downloadCsv } from '../utils/report';
 import type { ChartDatum, Status } from '../types/cloud';
 

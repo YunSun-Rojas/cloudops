@@ -50,7 +50,7 @@ interface AppContextValue extends PersistedState {
   resetAll: () => void;
 }
 
-/** Costos iniciales de una propuesta: 1 unidad de cada servicio elegido, 730 h al mes */
+/** Valores predeterminados para restaurar desde el módulo de Costos */
 const buildProposalCostItems = (serviceIds: string[]): CostItem[] =>
   serviceIds.flatMap((serviceId) => {
     const service = awsServices.find((item) => item.id === serviceId);
@@ -223,18 +223,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const addProposal = useCallback(
     async (proposal: NewProposal) => {
       try {
-        const initialCosts = buildProposalCostItems(proposal.services);
-        const newId = await insertProposal(
-          proposal,
-          initialCosts,
-          getRegionById(proposal.regionId).costFactor,
-        );
+        const newId = await insertProposal(proposal);
         await refreshProposals();
         // La propuesta nueva pasa a ser la activa
         setState((prev) => ({ ...prev, activeProposalId: newId, regionId: proposal.regionId }));
         pushNotification({
           title: 'Propuesta registrada',
-          message: `${proposal.name} quedó registrada en la región ${proposal.regionId} con costos iniciales.`,
+          message: `${proposal.name} quedó registrada en la región ${proposal.regionId}. Calcula sus costos desde el módulo de Costos.`,
           status: 'ok',
         });
         return true;
