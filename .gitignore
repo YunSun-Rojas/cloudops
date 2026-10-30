@@ -2,6 +2,7 @@ node_modules
 dist
 dist-ssr
 .vite
+.vercel
 *.local
 .DS_Store
 .env
