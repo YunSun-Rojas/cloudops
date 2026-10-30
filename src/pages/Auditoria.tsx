@@ -76,9 +76,18 @@ export default function Auditoria() {
   const captureByGps = () => {
     if (!('geolocation' in navigator)) {
       setStatus('error');
+      setCurrent(null);
       setErrorMsg('Este navegador no soporta geolocalización por GPS.');
       return;
     }
+
+    if (!window.isSecureContext) {
+      setStatus('error');
+      setCurrent(null);
+      setErrorMsg('La geolocalización por GPS solo está disponible en HTTPS o en localhost.');
+      return;
+    }
+
     setStatus('loading-gps');
     setErrorMsg('');
 
@@ -91,24 +100,33 @@ export default function Auditoria() {
       });
     };
 
-    navigator.geolocation.getCurrentPosition(
-      onSuccess,
-      () => {
-        navigator.geolocation.getCurrentPosition(
-          onSuccess,
-          (fallbackError) => {
-            setStatus('error');
-            setErrorMsg(
-              fallbackError.code === fallbackError.PERMISSION_DENIED
-                ? 'Permiso de ubicación denegado. Habilítalo en el navegador para usar el GPS.'
-                : 'No se pudo obtener la ubicación por GPS.',
-            );
-          },
-          { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 },
-        );
-      },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
-    );
+    const onError = (error: GeolocationPositionError) => {
+      setStatus('error');
+      setCurrent(null);
+
+      if (error.code === error.PERMISSION_DENIED) {
+        setErrorMsg('Permiso de ubicación denegado. Habilítalo en el navegador para usar el GPS.');
+        return;
+      }
+
+      if (error.code === error.POSITION_UNAVAILABLE) {
+        setErrorMsg('La ubicación por GPS no está disponible en este momento. Inténtalo de nuevo.');
+        return;
+      }
+
+      if (error.code === error.TIMEOUT) {
+        setErrorMsg('Se agotó el tiempo para obtener la ubicación por GPS. Inténtalo de nuevo.');
+        return;
+      }
+
+      setErrorMsg('No se pudo obtener la ubicación por GPS.');
+    };
+
+    navigator.geolocation.getCurrentPosition(onSuccess, onError, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    });
   };
 
   const captureByIp = async () => {
