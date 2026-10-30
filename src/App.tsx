@@ -9,6 +9,7 @@ import Security from './pages/Security';
 import Network from './pages/Network';
 import Services from './pages/Services';
 import Auditoria from './pages/Auditoria';
+import AnalisisIAView from './components/AnalisisIAView';
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/network" element={<Network />} />
             <Route path="/services" element={<Services />} />
             <Route path="/auditoria" element={<Auditoria />} />
+            <Route path="/analisis-ia" element={<AnalisisIAView />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>
         </Routes>
