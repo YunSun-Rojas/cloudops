@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from 'react';
-import { AlertCircle, BrainCircuit, CheckCircle2, LoaderCircle, ShieldCheck } from 'lucide-react';
+import { AlertCircle, BrainCircuit, CheckCircle2, FileArchive, GitBranch, LoaderCircle, ShieldCheck } from 'lucide-react';
 import SectionCard from './SectionCard';
 import {
   analyzeGithubRepository,
   type AuditProgress,
   type GithubAuditResult,
 } from '../services/githubAuditService';
+import { analyzeZipProject } from '../services/zipAuditService';
 
 const improvementStyles: Record<GithubAuditResult['improvementLevel'], string> = {
   Bajo: 'bg-security/10 text-security',
@@ -19,10 +20,13 @@ export default function AnalisisIAView() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<AuditProgress | null>(null);
+  const [source, setSource] = useState<'github' | 'zip'>('github');
+  const [zipFile, setZipFile] = useState<File | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (loading) return;
+    if (source === 'zip' && !zipFile) return;
 
     setLoading(true);
     setProgress({ stage: 'loading', completedBatches: 0, totalBatches: 0 });
@@ -30,7 +34,11 @@ export default function AnalisisIAView() {
     setResult(null);
 
     try {
-      setResult(await analyzeGithubRepository(repositoryUrl, setProgress));
+      setResult(
+        source === 'github'
+          ? await analyzeGithubRepository(repositoryUrl, setProgress)
+          : await analyzeZipProject(zipFile as File, setProgress),
+      );
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -51,37 +59,95 @@ export default function AnalisisIAView() {
           <h1 className="text-2xl font-bold text-ink dark:text-night-ink">Análisis IA</h1>
         </div>
         <p className="mt-1 text-body text-muted dark:text-night-muted">
-          Prioriza el código y las configuraciones sensibles de un repositorio público para reducir el consumo de análisis.
+          Prioriza el código y las configuraciones sensibles de un repositorio público o de un proyecto en ZIP para reducir el consumo de análisis.
         </p>
       </div>
 
       <SectionCard
-        title="Analizar repositorio"
+        title="Analizar proyecto"
         description="Se priorizan archivos de código, APIs, autenticación, infraestructura, pruebas y configuración para limitar el consumo."
         icon={ShieldCheck}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="github-repository-url" className="label-field">
-              URL del repositorio
-            </label>
-            <input
-              id="github-repository-url"
-              type="url"
-              required
-              value={repositoryUrl}
-              onChange={(event) => setRepositoryUrl(event.target.value)}
-              placeholder="https://github.com/usuario/repositorio"
-              className="input-field"
-              disabled={loading}
-            />
+          <div
+            className="inline-flex rounded-lg border border-line p-1 dark:border-night-line"
+            role="group"
+            aria-label="Origen del proyecto"
+          >
+            {(
+              [
+                ['github', 'Repositorio GitHub', GitBranch],
+                ['zip', 'Archivo ZIP', FileArchive],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <button
+                key={value}
+                type="button"
+                disabled={loading}
+                aria-pressed={source === value}
+                onClick={() => setSource(value)}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+                  source === value ? 'bg-brand text-white' : 'text-muted hover:text-ink dark:text-night-muted'
+                }`}
+              >
+                <Icon size={14} aria-hidden="true" /> {label}
+              </button>
+            ))}
           </div>
-          <button type="submit" className="btn-primary" disabled={loading || !repositoryUrl.trim()}>
+
+          {source === 'github' ? (
+            <div>
+              <label htmlFor="github-repository-url" className="label-field">
+                URL del repositorio
+              </label>
+              <input
+                id="github-repository-url"
+                type="url"
+                required
+                value={repositoryUrl}
+                onChange={(event) => setRepositoryUrl(event.target.value)}
+                placeholder="https://github.com/usuario/repositorio"
+                className="input-field"
+                disabled={loading}
+              />
+            </div>
+          ) : (
+            <div>
+              <label htmlFor="project-zip" className="label-field">
+                Archivo ZIP del proyecto
+              </label>
+              <input
+                id="project-zip"
+                type="file"
+                required
+                accept=".zip,application/zip,application/x-zip-compressed"
+                onChange={(event) => setZipFile(event.target.files?.[0] ?? null)}
+                className="input-field"
+                disabled={loading}
+              />
+              {zipFile && (
+                <p className="mt-1.5 text-[12px] text-ink dark:text-night-ink">
+                  Seleccionado: {zipFile.name} ({(zipFile.size / 1024 / 1024).toFixed(1)} MB)
+                </p>
+              )}
+              <p className="mt-1.5 text-[12px] text-muted dark:text-night-muted">
+                Comprime el proyecto sin node_modules, dist ni .git (máximo 25 MB). El ZIP se abre en tu navegador y
+                solo se envían a la IA los archivos de código y configuración seleccionados, con las claves que el
+                sistema reconoce ya tapadas.
+              </p>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            className="btn-primary"
+            disabled={loading || (source === 'github' ? !repositoryUrl.trim() : !zipFile)}
+          >
             {loading ? (
               <>
                 <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
                 {progress?.stage === 'loading'
-                  ? 'Leyendo repositorio...'
+                  ? 'Leyendo proyecto...'
                   : progress?.stage === 'local-review'
                     ? 'Aplicando reglas de seguridad...'
                   : progress?.stage === 'summarizing'

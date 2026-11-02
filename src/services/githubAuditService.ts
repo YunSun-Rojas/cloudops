@@ -21,7 +21,7 @@ interface GithubRepository {
   default_branch: string;
 }
 
-interface SourceFile {
+export interface SourceFile {
   path: string;
   content: string;
 }
@@ -42,12 +42,12 @@ class AuditApiError extends Error {
   }
 }
 
-const MAX_REVIEW_FILES = 30;
-const MAX_FILE_BYTES = 100_000;
-const MAX_REPOSITORY_BYTES = 150_000;
+export const MAX_REVIEW_FILES = 30;
+export const MAX_FILE_BYTES = 100_000;
+export const MAX_REPOSITORY_BYTES = 150_000;
 const MAX_BATCH_FILES = 30;
 const MAX_BATCH_BYTES = 60_000;
-const IGNORED_DIRECTORIES = new Set([
+export const IGNORED_DIRECTORIES = new Set([
   '.git',
   '.next',
   '.nuxt',
@@ -264,7 +264,7 @@ function isGithubTree(value: unknown): value is GithubTree {
   );
 }
 
-function reviewPriority(path: string): number | null {
+export function reviewPriority(path: string): number | null {
   const segments = path.split('/');
   const normalizedSegments = segments.map((segment) => segment.toLowerCase());
   if (normalizedSegments.some((segment) => EXCLUDED_PATH_SEGMENTS.has(segment))) return null;
@@ -699,6 +699,14 @@ async function postAuditRequest(body: unknown, onRetry?: (seconds: number) => vo
   }
 }
 
+/** Proyecto ya leído (de GitHub o de un ZIP), listo para analizar */
+export interface LoadedSource {
+  repositoryName: string; // "usuario/repositorio" o "zip/nombre"
+  branch: string;
+  totalFiles: number;
+  files: SourceFile[];
+}
+
 export async function analyzeGithubRepository(
   repositoryUrl: string,
   onProgress?: (progress: AuditProgress) => void,
@@ -706,7 +714,18 @@ export async function analyzeGithubRepository(
   onProgress?.({ stage: 'loading', completedBatches: 0, totalBatches: 0 });
   const { owner, repository } = parseRepositoryUrl(repositoryUrl);
   const { branch, totalFiles, files } = await loadRepositoryFiles(owner, repository);
-  const repositoryName = `${owner}/${repository}`;
+  return auditLoadedSource(
+    { repositoryName: `${owner}/${repository}`, branch, totalFiles, files },
+    onProgress,
+  );
+}
+
+/** Análisis común: no depende de si los archivos vienen de GitHub o de un ZIP */
+export async function auditLoadedSource(
+  source: LoadedSource,
+  onProgress?: (progress: AuditProgress) => void,
+): Promise<GithubAuditResult> {
+  const { repositoryName, branch, totalFiles, files } = source;
   onProgress?.({ stage: 'local-review', completedBatches: 0, totalBatches: 0 });
   const localResult = buildStaticAudit(
     repositoryName,
