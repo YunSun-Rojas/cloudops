@@ -144,6 +144,9 @@ cloudops-dashboard/
 | `/security` | Seguridad | Modelo de responsabilidad compartida, controles con semáforo verde/amarillo/rojo, protección de cuentas, protección de datos, cumplimiento y tabla IAM |
 | `/network` | Arquitectura de Red | Diagrama construido en la interfaz: Internet → Route 53 → CloudFront → VPC → subredes pública y privada → EC2 / RDS, con tablas de enrutamiento y controles de red |
 | `/services` | Servicios AWS | Catálogo con EC2, S3, RDS, IAM, VPC, Route 53, CloudFront y CloudWatch: nombre, categoría, descripción, función principal y estado de utilización |
+| `/analisis-ia` | Análisis IA | Revisión asistida de repositorios públicos de GitHub o proyectos ZIP, con proveedores de IA en cadena de respaldo, hallazgos de seguridad y recomendaciones |
+
+Para explicar y demostrar este módulo, consulta la [documentación de Análisis IA](./docs/analisis-ia.md).
 
 ### Requisitos funcionales cubiertos
 

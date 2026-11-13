@@ -1,9 +1,6 @@
 import { unzipSync } from 'fflate';
 import {
   IGNORED_DIRECTORIES,
-  MAX_FILE_BYTES,
-  MAX_REPOSITORY_BYTES,
-  MAX_REVIEW_FILES,
   auditLoadedSource,
   reviewPriority,
   type AuditProgress,
@@ -11,6 +8,9 @@ import {
   type LoadedSource,
   type SourceFile,
 } from './githubAuditService';
+import {
+  selectAnalysisFiles,
+} from './auditSelection.mjs';
 
 const MAX_ZIP_BYTES = 25 * 1024 * 1024; // 25 MB
 const MAX_ZIP_ENTRIES = 50_000; // entradas totales del ZIP, antes de filtrar
@@ -146,15 +146,10 @@ async function loadZipSource(file: File): Promise<LoadedSource> {
     throw new Error('No se encontraron archivos de código o configuración revisables en el ZIP.');
   }
 
-  const selected: ZipEntry[] = [];
-  let totalBytes = 0;
-  for (const { entry } of reviewable) {
-    if (selected.length >= MAX_REVIEW_FILES || totalBytes >= MAX_REPOSITORY_BYTES) break;
-    if (entry.size === 0 || entry.size > MAX_FILE_BYTES) continue;
-    if (totalBytes + entry.size > MAX_REPOSITORY_BYTES) continue;
-    selected.push(entry);
-    totalBytes += entry.size;
-  }
+  const selected = selectAnalysisFiles(
+    reviewable.map(({ entry }) => entry),
+    (entry) => entry.size,
+  );
   if (selected.length === 0) {
     throw new Error('No se encontraron archivos relevantes dentro de los límites de análisis.');
   }

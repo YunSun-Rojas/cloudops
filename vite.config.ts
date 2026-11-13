@@ -35,7 +35,7 @@ function localGithubAuditPlugin(): Plugin {
         let body = '';
         let bodyTooLarge = false;
         apiRequest.on('data', (chunk) => {
-          if (body.length + chunk.length > 500_000) {
+          if (body.length + chunk.length > 4_500_000) {
             bodyTooLarge = true;
             return;
           }
@@ -81,12 +81,13 @@ function localGithubAuditPlugin(): Plugin {
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, '.', 'GEMINI_');
+  // Variables de las IAs (solo servidor): se cargan desde .env y se pasan a la función local
+  const env = loadEnv(mode, '.', ['GEMINI_', 'MISTRAL_', 'OPENROUTER_', 'GROQ_']);
   const runtime = globalThis as typeof globalThis & {
     process: { env: Record<string, string | undefined> };
   };
-  if (env.GEMINI_API_KEY) {
-    runtime.process.env.GEMINI_API_KEY ??= env.GEMINI_API_KEY;
+  for (const [key, value] of Object.entries(env)) {
+    runtime.process.env[key] ??= value;
   }
 
   return {

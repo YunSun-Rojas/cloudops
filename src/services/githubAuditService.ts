@@ -3,8 +3,22 @@ import {
   type GithubAuditResult,
   type SecurityFinding,
 } from '../types/githubAudit';
+import {
+  canAddAnalysisFile,
+  MAX_FILE_BYTES,
+  MAX_REPOSITORY_BYTES,
+  MAX_REVIEW_FILES,
+} from './auditSelection.mjs';
+import { aggregateAuditBatches } from './auditAggregation.mjs';
+import { calculateSecurityMetrics, SECURITY_RISK_FORMULA } from './auditRisk.mjs';
 
 export type { AwsRecommendation, GithubAuditResult, SecurityFinding } from '../types/githubAudit';
+export {
+  MAX_ANALYSIS_BATCHES,
+  MAX_FILE_BYTES,
+  MAX_REPOSITORY_BYTES,
+  MAX_REVIEW_FILES,
+} from './auditSelection.mjs';
 
 interface GithubTreeEntry {
   path: string;
@@ -31,6 +45,7 @@ export interface AuditProgress {
   completedBatches: number;
   totalBatches: number;
   retryAfterSeconds?: number;
+  partialResult?: GithubAuditResult;
 }
 
 class AuditApiError extends Error {
@@ -42,10 +57,7 @@ class AuditApiError extends Error {
   }
 }
 
-export const MAX_REVIEW_FILES = 30;
-export const MAX_FILE_BYTES = 100_000;
-export const MAX_REPOSITORY_BYTES = 150_000;
-const MAX_BATCH_FILES = 30;
+const MAX_BATCH_FILES = 15;
 const MAX_BATCH_BYTES = 60_000;
 export const IGNORED_DIRECTORIES = new Set([
   '.git',
@@ -177,9 +189,16 @@ const EXCLUDED_PATH_SEGMENTS = new Set([
   '__fixtures__',
   '__mocks__',
   '__snapshots__',
+  '__tests__',
+  'cypress',
   'fixtures',
   'mocks',
+  'playwright',
   'samples',
+  'spec',
+  'specs',
+  'test',
+  'tests',
   'storybook-static',
   'test-results',
 ]);
@@ -272,6 +291,7 @@ export function reviewPriority(path: string): number | null {
   const fileName = normalizedSegments[normalizedSegments.length - 1];
   if (
     EXCLUDED_FILE_NAMES.has(fileName) ||
+    /\.(?:test|spec)\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/i.test(fileName) ||
     /^(?:mock|mocks|fixture|fixtures|sample|samples|seed|seeds|testdata|mockdata)\.[^.]+$/.test(
       fileName,
     ) ||
@@ -308,6 +328,14 @@ export function reviewPriority(path: string): number | null {
   }
 
   if (
+    /auth|login|session|token|interceptor|axios|http|api|client|guard|protected|route|permission|role|config|env|security|upload|storage/i.test(
+      path,
+    )
+  ) {
+    return 0;
+  }
+
+  if (
     normalizedSegments.some((segment) =>
       ['.github', '.circleci', 'infra', 'infrastructure', 'terraform', 'k8s', 'kubernetes'].includes(
         segment,
@@ -317,7 +345,7 @@ export function reviewPriority(path: string): number | null {
       fileName,
     )
   ) {
-    return 0;
+    return 1;
   }
   if (
     normalizedSegments.some((segment) =>
@@ -328,14 +356,6 @@ export function reviewPriority(path: string): number | null {
     /(?:auth|security|permission|secret|credential)/i.test(fileName)
   ) {
     return 1;
-  }
-  if (
-    normalizedSegments.some((segment) =>
-      ['test', 'tests', '__tests__', 'spec', 'specs'].includes(segment),
-    ) ||
-    /\.(?:test|spec)\.[^.]+$/i.test(fileName)
-  ) {
-    return 3;
   }
   if (isRootReadme || isSecurityDoc) return 4;
   return 2;
@@ -430,6 +450,7 @@ async function loadRepositoryFiles(
 
   const ref = branch.split('/').map(encodeURIComponent).join('/');
   const files: SourceFile[] = [];
+  const fileSizes: number[] = [];
   let totalBytes = 0;
   for (const { entry } of reviewableFiles) {
     if (files.length >= MAX_REVIEW_FILES || totalBytes >= MAX_REPOSITORY_BYTES) break;
@@ -455,7 +476,11 @@ async function loadRepositoryFiles(
     if (totalBytes + fileBytes > MAX_REPOSITORY_BYTES) {
       continue;
     }
+    if (!canAddAnalysisFile(fileSizes, fileBytes)) {
+      continue;
+    }
     files.push({ path: entry.path, content });
+    fileSizes.push(fileBytes);
     totalBytes += fileBytes;
   }
 
@@ -531,7 +556,7 @@ const STATIC_SECURITY_RULES: StaticRule[] = [
     recommendation: 'Evita evaluar cadenas dinámicas; utiliza alternativas explícitas y valida cualquier entrada.',
   },
   {
-    pattern: /\bdangerouslySetInnerHTML\b|\.innerHTML\s*=/,
+    pattern: /\bdangerouslySetInnerHTML\b|\.\s*innerHTML\s*=(?!\s*["'`]\s*["'`])\s*/,
     severity: 'Alta',
     description: 'Se encontró una asignación de HTML que podría introducir XSS si el contenido no está sanitizado.',
     recommendation: 'Usa renderizado seguro o sanitiza el contenido con una biblioteca mantenida y una política estricta.',
@@ -580,81 +605,40 @@ function buildStaticAudit(
       findings.push({
         severity: rule.severity,
         file: file.path,
+        evidence: lines[lineIndex].trim(),
         description: `${rule.description} Línea ${lineIndex + 1}.`,
         recommendation: rule.recommendation,
       });
     }
   }
 
-  const scorePenalty: Record<SecurityFinding['severity'], number> = {
-    Crítica: 30,
-    Alta: 18,
-    Media: 9,
-    Baja: 4,
-    Info: 0,
-  };
-  const maximumLocalScore = files.length < totalFiles ? 55 : 70;
-  const deductions = findings.reduce(
-    (score, finding) => score + scorePenalty[finding.severity],
-    0,
-  );
-  const securityScore = Math.max(0, maximumLocalScore - deductions);
-  const estimatedSecurityGainPoints = Math.min(
-    10,
-    deductions,
-    (files.length < totalFiles ? 65 : 80) - securityScore,
-  );
-  const awsRecommendations = [
-    {
-      service: 'AWS Secrets Manager',
-      reason: 'Almacena y rota credenciales fuera del código fuente.',
-    },
-    {
-      service: 'AWS IAM',
-      reason: 'Aplica roles y permisos de mínimo privilegio a los recursos desplegados.',
-    },
-    {
-      service: 'AWS CloudTrail',
-      reason: 'Registra la actividad de la cuenta para auditoría y detección de cambios.',
-    },
-  ];
-
+  const securityMetrics = calculateSecurityMetrics(findings, []);
   return {
     repository,
     branch,
     analysisEngine: 'Reglas locales',
-    analysisNotice: `${notice} Puntaje heurístico limitado a ${maximumLocalScore} porque las reglas locales no pueden certificar la seguridad del proyecto.`,
+    analysisNotice: `${notice} El índice local solo pondera coincidencias conocidas; pueden ser falsos positivos y no representa una medición de seguridad.`,
     reviewedFiles: files.length,
+    selectedFiles: files.length,
     reviewedPaths: files.map((file) => file.path),
     totalFiles,
     findings,
-    securityScore,
-    estimatedSecurityAfterRecommendations: Math.min(
-      files.length < totalFiles ? 65 : 80,
-      securityScore + estimatedSecurityGainPoints,
-    ),
-    estimatedSecurityGainPoints,
-    securityEstimateAssumptions: [
-      'Estimación heurística basada únicamente en los patrones estáticos detectados.',
-      'Supone que todas las recomendaciones relacionadas se implementan correctamente y se verifican.',
-      'No equivale a una medición de riesgo real ni garantiza una mejora porcentual.',
-    ],
+    ...securityMetrics,
+    securityEstimateAssumptions: [SECURITY_RISK_FORMULA],
     scalability: {
       level: 'No determinada',
-      assessment:
-        'El respaldo local no puede evaluar de forma fiable la arquitectura ni el comportamiento bajo carga; la escalabilidad requiere análisis contextual y pruebas.',
+      assessment: 'No evaluable con las reglas locales: se requiere análisis contextual de la arquitectura y pruebas de carga.',
+      evidence: '',
+      evidenceFiles: [],
       bottlenecks: [],
-      recommendations: [
-        'Ejecutar pruebas de carga con métricas de latencia, errores y consumo de recursos.',
-        'Revisar consultas, caché y tareas asíncronas con datos representativos.',
-      ],
+      recommendations: [],
     },
-    awsRecommendations,
-    improvementLevel: securityScore >= 80 ? 'Bajo' : securityScore >= 55 ? 'Medio' : 'Alto',
+    awsRecommendations: [],
+    improvementLevel: 'No determinada',
     technicalJustification:
       findings.length > 0
-        ? `El análisis estático local encontró ${findings.length} patrón(es) que requieren revisión manual. El puntaje es una heurística, no una evaluación contextual de una IA.`
-        : 'El análisis estático local no encontró coincidencias con las reglas incluidas. Esto no demuestra que el repositorio esté libre de vulnerabilidades.',
+        ? `Índice orientativo calculado a partir de ${findings.length} coincidencia(s) local(es); cada una debe validarse manualmente.`
+        : 'Sin coincidencias en las reglas locales; esto no significa que el proyecto esté libre de riesgos.',
   };
 }
 
@@ -672,9 +656,7 @@ async function postAuditRequest(body: unknown, onRetry?: (seconds: number) => vo
     }
 
     const payload: unknown = await response.json().catch(() => null);
-    if (
-      response.status === 503 && attempt < 2
-    ) {
+    if ((response.status === 429 || response.status === 503) && attempt < 2) {
       const seconds =
         isRecord(payload) && typeof payload.retryAfterSeconds === 'number'
           ? Math.min(90, Math.max(1, payload.retryAfterSeconds))
@@ -732,18 +714,19 @@ export async function auditLoadedSource(
     branch,
     totalFiles,
     files,
-    'Gemini no está disponible; se muestran coincidencias de reglas estáticas locales.',
+    'Ninguna IA está disponible; se muestran coincidencias de reglas estáticas locales.',
   );
   const batches = splitIntoBatches(files);
   const results: GithubAuditResult[] = [];
+  const failedBatches: Array<{ index: number; message: string }> = [];
 
-  try {
-    for (const [index, batch] of batches.entries()) {
-      onProgress?.({
-        stage: 'analyzing',
-        completedBatches: index,
-        totalBatches: batches.length,
-      });
+  for (const [index, batch] of batches.entries()) {
+    onProgress?.({
+      stage: 'analyzing',
+      completedBatches: index,
+      totalBatches: batches.length,
+    });
+    try {
       results.push(
         await postAuditRequest(
           {
@@ -763,35 +746,85 @@ export async function auditLoadedSource(
           },
         ),
       );
-      onProgress?.({
-        stage: 'analyzing',
-        completedBatches: index + 1,
-        totalBatches: batches.length,
+    } catch (error) {
+      failedBatches.push({
+        index,
+        message: error instanceof Error ? error.message : 'Error desconocido.',
       });
     }
 
+    const completedFiles = new Set(results.flatMap((result) => result.reviewedPaths)).size;
+    const partialResult =
+      results.length > 0
+        ? aggregateAuditBatches(
+            results,
+            totalFiles,
+            files.length,
+            `La IA ya devolvió resultados para ${completedFiles} de ${files.length} archivos seleccionados. ` +
+              `${results.length} lotes respondieron y ${failedBatches.length} fallaron; el análisis continúa.`,
+            failedBatches.length > 0 || index + 1 < batches.length,
+            results.length,
+            batches.length,
+          )
+        : undefined;
     onProgress?.({
-      stage: 'summarizing',
-      completedBatches: batches.length,
+      stage: 'analyzing',
+      completedBatches: index + 1,
       totalBatches: batches.length,
+      partialResult,
     });
-    return await postAuditRequest({
-      action: 'summarize',
-      repository: repositoryName,
-      branch,
-      totalFiles,
-      reviewedFiles: files.length,
-      reviewedPaths: files.map((file) => file.path),
-      batches: results,
-    });
-  } catch (error) {
-    const reason =
-      error instanceof AuditApiError && error.status === 429
-        ? 'Gemini alcanzó su cuota o límite temporal; se usó el análisis estático local.'
-        : 'No se pudo completar el análisis de Gemini; se usó el análisis estático local.';
+  }
+
+  if (results.length === 0) {
+    const failureDetails = failedBatches
+      .map(({ index, message }) => `Lote ${index + 1}: ${message}`)
+      .join(' | ');
     return {
       ...localResult,
-      analysisNotice: `${reason}${error instanceof Error ? ` Detalle: ${error.message}` : ''}`,
+      localRuleFindings: localResult.findings.length,
+      successfulBatches: 0,
+      totalBatches: batches.length,
+      analysisNotice:
+        `Ningún lote obtuvo resultados de IA. Se muestran únicamente coincidencias locales de los ` +
+        `${files.length} archivos leídos. ${failureDetails}`,
     };
   }
+
+  const reviewedPaths = [...new Set(results.flatMap((result) => result.reviewedPaths))];
+  const completedFiles = reviewedPaths.length;
+  const hasFailedBatches = failedBatches.length > 0;
+  const failureNotice = hasFailedBatches
+    ? ` ${failedBatches.length} de ${batches.length} lotes no devolvieron resultados IA (${failedBatches
+        .map(({ index, message }) => `lote ${index + 1}: ${message}`)
+        .join(' | ')}).`
+    : '';
+  const partialNotice =
+    `${completedFiles} de ${files.length} archivos seleccionados tienen resultados IA; ` +
+    `${results.length} de ${batches.length} lotes respondieron.${failureNotice} ` +
+    'Los resultados solo describen los archivos con respuesta.';
+
+  onProgress?.({
+    stage: 'summarizing',
+    completedBatches: batches.length,
+    totalBatches: batches.length,
+    partialResult: aggregateAuditBatches(
+      results,
+      totalFiles,
+      files.length,
+      `Consolidando los resultados IA de ${completedFiles} archivos. ${partialNotice}`,
+      hasFailedBatches,
+      results.length,
+      batches.length,
+    ),
+  });
+
+  return aggregateAuditBatches(
+    results,
+    totalFiles,
+    files.length,
+    partialNotice,
+    hasFailedBatches,
+    results.length,
+    batches.length,
+  );
 }
